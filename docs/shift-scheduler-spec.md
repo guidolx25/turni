@@ -1,6 +1,6 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.1 (2026-07-15) · **Status:** Approved for build
+**Version:** 1.2 (2026-07-15) · **Status:** Approved for build
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -90,7 +90,9 @@ Timezone: **Europe/Rome** everywhere.
 
 Root is a normal user row with `is_root = true`: hidden from user lists, worker pickers, and notification recipients-by-role; visible only to itself. Root inherits all admin capabilities.
 
-No public signup. Root seeds the six accounts (5 workers + root; Matteo may be a single account holding worker+root, or a separate root account — **build decision: single account with `is_root` flag**, simpler).
+No public signup. Root seeds the accounts (5 workers + root; Matteo may be a single account holding worker+root, or a separate root account — **build decision: single account with `is_root` flag**, simpler; that decision makes it **5 account rows**, not 6).
+
+**Users are never hard-deleted.** Deactivation via `users.active = false` is the only removal: the root panel offers deactivate, not delete. Assignments, swaps and audit rows reference users, and a deletion would either destroy history or leave the audit log lying about who acted. Deactivation is immediate — it revokes the user's open sessions, not just their next login.
 
 ---
 
@@ -126,7 +128,11 @@ sacrifice_proposals(id, week_id, user_id, proposed_free_day,
 
 notifications(id, user_id, event_type, payload JSON, read BOOL, created_at)
 
-audit_log(id, actor_id, action, entity, entity_id, payload JSON, created_at)
+audit_log(id, actor_id NULLABLE, action, entity, entity_id, payload JSON, created_at)
+      -- actor_id NULL means a system action (cron solve, 48 h swap expiry,
+      -- nightly backup) — those transitions are logged too and have no human
+      -- actor. There is deliberately no system user row. Users are never
+      -- hard-deleted (§5), so a NULL actor_id is never a vanished human.
 
 solver_state(user_id PK, last_worked_slot ENUM(am,pm), last_worked_date)
 ```
@@ -138,6 +144,12 @@ solver_state(user_id PK, last_worked_slot ENUM(am,pm), last_worked_date)
 ```
 POST   /auth/login            POST /auth/logout           GET /me
 PATCH  /me/settings           (language, email_notifications, password change)
+
+-- /me carries the caller's own §5 capabilities as derived booleans, so the
+-- frontend knows which panels to render. They are derived from the same matrix
+-- the permission dependencies enforce — never a parallel mapping. They appear on
+-- /me ONLY: no endpoint returning *other* users exposes them. `is_root` itself
+-- is never serialized anywhere (§5: root is visible only to itself).
 
 GET    /weeks                 (statuses, deadlines)
 GET    /schedule?week=        (assignments incl. weekend template)
@@ -223,7 +235,7 @@ Each phase ends with: tests green, gate checklist verified manually, commit tagg
 
 **Phase 0 — Scaffold.** Repo, FastAPI + Vite monorepo layout, tooling (ruff, pytest, eslint, prettier), CI stub. *Gate:* dev servers run, lint clean.
 
-**Phase 1 — Data + auth.** SQLAlchemy models, migrations, session auth, seed script (6 users), role/permission middleware. *Gate:* login/logout works for all roles; root invisible to a non-root user listing.
+**Phase 1 — Data + auth.** SQLAlchemy models, migrations, session auth, seed script (5 users — see §5's single-account build decision), role/permission middleware. *Gate:* login/logout works for all roles; root invisible to a non-root user listing.
 
 **Phase 2 — Solver core.** CP-SAT model, weekend template emission, solver_state continuity, assumption-literal infeasibility explanation. **Test-heavy phase:** golden test (photographed week), infeasibility tests, alternation-across-weeks test, Mattia-clustering test. *Gate:* all solver tests pass; golden week reproduced.
 
