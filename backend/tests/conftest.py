@@ -1,4 +1,4 @@
-"""Shared fixtures for the schema suite (spec §6).
+"""Shared fixtures for the schema (§6) and auth (§5/§7) suites.
 
 Two things this module guarantees before anything else imports `app`:
 
@@ -13,14 +13,19 @@ Two things this module guarantees before anything else imports `app`:
 The migrated schema is built once per session into a template file and copied
 per test, so each test gets an isolated, function-scoped database while paying
 the alembic cost only once.
+
+The HTTP fixtures exist because `app.db.engine` is bound at import time to that
+empty scratch file: a TestClient is only useful once `get_session` is overridden
+with the test's own migrated Session, which `api_client_factory` does.
 """
 
 from __future__ import annotations
 
+import itertools
 import os
 import shutil
 import tempfile
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -33,10 +38,16 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_SCRATCH / 'session.db'}"
 
 import pytest  # noqa: E402
 from alembic.config import Config  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import Connection, Engine, create_engine, event, text  # noqa: E402
 from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 
 from alembic import command  # noqa: E402
+
+# A stable, obviously-fake peer address. Tests that care about the per-IP half of
+# the login rate limit (§7) pass their own.
+DEFAULT_CLIENT_IP = "203.0.113.10"
 
 
 def alembic_config(url: str) -> Config:
@@ -135,3 +146,87 @@ def session(engine: Engine) -> Generator[Session, None, None]:
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
     with factory() as sess:
         yield sess
+
+
+@pytest.fixture
+def fresh_session(
+    migrated_template: Path, tmp_path: Path
+) -> Generator[Callable[[], Session], None, None]:
+    """Build additional, independent migrated databases on demand.
+
+    For the few tests that must compare two separate deployments — e.g. proving
+    the seed script generates a *different* password each time it runs against a
+    virgin database (§5: no default credential).
+    """
+    engines: list[Engine] = []
+    sessions: list[Session] = []
+    counter = itertools.count()
+
+    def factory() -> Session:
+        path = tmp_path / f"fresh-{next(counter)}.db"
+        shutil.copyfile(migrated_template, path)
+        eng = make_engine(path)
+        engines.append(eng)
+        sess = sessionmaker(bind=eng, autoflush=False, expire_on_commit=False, future=True)()
+        sessions.append(sess)
+        return sess
+
+    try:
+        yield factory
+    finally:
+        for sess in sessions:
+            sess.close()
+        for eng in engines:
+            eng.dispose()
+
+
+@pytest.fixture
+def api_client_factory(session: Session) -> Generator[Callable[..., TestClient], None, None]:
+    """TestClients that talk to this test's migrated database.
+
+    Two process-global pieces of state have to be handled or tests bleed into
+    each other:
+
+    * `app.db.engine` — bound at import time to an empty scratch file, so every
+      client overrides `get_session` with the test's own Session.
+    * the login rate limiter (§7) — module-level in `app.routers.auth` and
+      deliberately per-process, so one test's failed logins would 429 the next.
+      Cleared on both sides of every test.
+
+    `target` defaults to the real app; permission tests pass their probe app.
+    """
+    from app.db import get_session
+    from app.routers.auth import _ip_limiter, _username_limiter
+
+    _username_limiter.clear()
+    _ip_limiter.clear()
+
+    overridden: list[FastAPI] = []
+    clients: list[TestClient] = []
+
+    def factory(target: FastAPI | None = None, *, ip: str = DEFAULT_CLIENT_IP) -> TestClient:
+        from app.main import app as real_app
+
+        resolved = real_app if target is None else target
+        if resolved not in overridden:
+            resolved.dependency_overrides[get_session] = lambda: session
+            overridden.append(resolved)
+        client = TestClient(resolved, client=(ip, 51000))
+        clients.append(client)
+        return client
+
+    try:
+        yield factory
+    finally:
+        for client in clients:
+            client.close()
+        for target in overridden:
+            target.dependency_overrides.clear()
+        _username_limiter.clear()
+        _ip_limiter.clear()
+
+
+@pytest.fixture
+def client(api_client_factory: Callable[..., TestClient]) -> TestClient:
+    """A TestClient for the real app (`app.main.app`)."""
+    return api_client_factory()
