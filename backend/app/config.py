@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     secret_key: str = "dev-insecure-change-me"
+    # spec §11: SQLite on a persistent volume in production; a local file in dev.
+    database_url: str = "sqlite:///./turni.db"
     # spec §4: ships false in v1; the state machine exists behind it.
     require_admin_approval: bool = False
     # spec §3: Europe/Rome for ALL scheduling logic. Store UTC, convert at edges.
