@@ -1,6 +1,6 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.0 (2026-07-15) · **Status:** Approved for build
+**Version:** 1.1 (2026-07-15) · **Status:** Approved for build
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -59,7 +59,7 @@ Weight separation: `W1 >> W2 >> W3` (e.g., 10 000 / 100 / 1). Document in code.
 
 Timezone: **Europe/Rome** everywhere.
 
-1. **Open window:** constraints may be submitted for any future week (multi-week supported), each week's window closes **Sunday 17:00** before that week starts.
+1. **Open window:** constraints may be submitted for any future week (multi-week supported), each week's window closes **Sunday 17:00** before that week starts. Submission is an **upsert** on `(user, week, day, slot)`; within a day the `full_day` slot and the `am`/`pm` slots are mutually exclusive — writing `full_day` replaces any `am`/`pm` rows for that day, and writing `am`/`pm` replaces a `full_day` row for that day.
 2. **Solve:** scheduled job (APScheduler cron, Sun 17:00) runs the solver for the upcoming week. Admin/root also have a manual **"Generate now"** button (marks window closed early — confirmation required).
 3. **Publish + lock:** schedule becomes visible to all, slots lock, notification fan-out.
 4. **Post-lock:** changes only via swap requests (§4) or admin override (§5).
@@ -97,15 +97,21 @@ No public signup. Root seeds the six accounts (5 workers + root; Matteo may be a
 ## 6. Data model (SQLite)
 
 ```
-users(id, username, password_hash, display_name, role ENUM(bagnino,spiaggino,jolly),
+users(id, username UNIQUE, password_hash, display_name, role ENUM(bagnino,spiaggino,jolly),
       is_admin BOOL, is_root BOOL, email, email_notifications BOOL,
       language ENUM(it,en), active BOOL, created_at)
+
+sessions(id, user_id, created_at, expires_at)
+      -- infrastructure, not domain: the server-side session store behind §7's
+      -- signed cookie. Logout deletes the row; expired rows are purged by the
+      -- nightly job (§11).
 
 weeks(id, monday_date UNIQUE, status ENUM(open,locked), solved_at, locked_at)
 
 constraints(id, user_id, week_id, day ENUM(mon..sun), slot ENUM(am,pm,full_day),
-            kind ENUM(hard,soft), note, created_at, updated_at)
-            -- editable while week.status = open
+            kind ENUM(hard,soft), note, created_at, updated_at,
+            UNIQUE(user_id, week_id, day, slot))
+            -- editable while week.status = open; submission is an upsert (§3)
 
 assignments(id, week_id, day, slot ENUM(am,pm), role ENUM(bagnino,spiaggino),
             user_id, source ENUM(solver,weekend_template,swap,override),
