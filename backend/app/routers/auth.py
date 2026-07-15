@@ -15,7 +15,7 @@ from app.config import settings
 from app.deps import CurrentWorker, DbDep
 from app.models import User
 from app.ratelimit import SlidingWindowRateLimiter
-from app.schemas import LoginIn, UserOut
+from app.schemas import LoginIn, MeOut, UserOut
 from app.security import (
     dummy_password_hash,
     hash_password,
@@ -127,8 +127,14 @@ def logout(
     return response
 
 
-@router.get("/me", response_model=UserOut)
-def me(user: CurrentWorker) -> User:
-    """§7: the caller's own account. Root sees itself here (§5) — this is a
-    self-lookup, not an enumeration, so `visible_users_stmt` does not apply."""
-    return user
+@router.get("/me", response_model=MeOut)
+def me(user: CurrentWorker) -> MeOut:
+    """§7: the caller's own account plus their derived §5 capabilities.
+
+    Root sees itself here (§5) — this is a self-lookup, not an enumeration, so
+    `visible_users_stmt` does not apply. The capabilities are why this route does
+    not answer UserOut: authority is not readable off `is_admin` alone (root
+    holds it via `is_root`, which never serializes), so /me states the rows
+    outright rather than leaving the frontend to infer them from a flag.
+    """
+    return MeOut.for_user(user)

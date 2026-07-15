@@ -14,6 +14,8 @@ import datetime as dt
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.enums import Language, UserRole
+from app.models import User
+from app.permissions import has_admin_capability, has_root_capability
 
 
 class LoginIn(BaseModel):
@@ -49,7 +51,80 @@ class UserAdminOut(UserOut):
     """A user as root may see them (`GET /root/users`, §7).
 
     Adds only administrative metadata; it inherits UserOut's fields and so
-    inherits the absence of `is_root` too.
+    inherits the absence of `is_root` too. §7 confines the capability booleans to
+    /me, so they are absent here as well: this endpoint answers "who exists", not
+    "what may they do".
     """
 
     created_at: dt.datetime
+
+
+class Capabilities(BaseModel):
+    """The caller's own §5 matrix rows, as derived booleans (§7).
+
+    One field per capability row, named for the row rather than for the flag
+    behind it: the frontend gates on "may I override a locked slot", not on "am I
+    an admin". If §5 ever moves a row between tiers, the wiring in `for_user`
+    changes and every consumer follows — no field renames, no frontend edit.
+
+    The two unconditional rows ("submit/edit own constraints", "view schedule,
+    request/accept swaps") are deliberately NOT emitted: every caller who can
+    reach /me is authenticated and active, so those rows are true for all of
+    them. A boolean that is never false is not a signal, and shipping one invites
+    the frontend to branch on a condition that cannot occur.
+    """
+
+    # §5 rows 3-6 — admin tier (root inherits).
+    trigger_solve: bool
+    override_locked_slots: bool
+    view_all_constraints: bool
+    view_audit_log: bool
+    # §5 rows 7-8 — root tier.
+    manage_users: bool
+    see_root_account: bool
+
+    @classmethod
+    def for_user(cls, user: User) -> Capabilities:
+        """Derive the caller's capabilities from `app.permissions`.
+
+        These predicates are the *same functions* the permission dependencies
+        enforce with (`app.deps`); this method only maps matrix rows onto them.
+        Never re-derive a row from `user.is_admin` / `user.is_root` here — a
+        second reading of the flags is a second matrix, and the two would drift
+        until the UI offered a button the API refuses.
+        """
+        admin = has_admin_capability(user)
+        root = has_root_capability(user)
+        return cls(
+            trigger_solve=admin,
+            override_locked_slots=admin,
+            view_all_constraints=admin,
+            view_audit_log=admin,
+            manage_users=root,
+            see_root_account=root,
+        )
+
+
+class MeOut(UserOut):
+    """`GET /me` (§7): the caller's own account, plus their own capabilities.
+
+    Its own schema because UserOut is the shape used for *other* users, and §7
+    puts the capability booleans on /me only. Inheriting UserOut inherits the
+    absence of `is_root`: `capabilities.see_root_account` is what root learns
+    about itself, which is a statement about the caller's authority, not the flag
+    itself resurfacing.
+    """
+
+    capabilities: Capabilities
+
+    @classmethod
+    def for_user(cls, user: User) -> MeOut:
+        """Build from the ORM row.
+
+        Explicit rather than `from_attributes`: capabilities are derived (§7) and
+        have no column to read.
+        """
+        return cls(
+            **UserOut.model_validate(user).model_dump(),
+            capabilities=Capabilities.for_user(user),
+        )

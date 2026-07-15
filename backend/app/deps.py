@@ -1,4 +1,4 @@
-"""Auth + permission dependencies — the spec §5 matrix, in one place.
+"""Auth + permission dependencies — the enforcement side of the spec §5 matrix.
 
 The tiers are dependencies rather than in-handler checks so that a route's
 authority is declared in its signature and cannot be forgotten in a branch. They
@@ -6,8 +6,13 @@ chain (`require_admin` depends on `require_worker`), so each tier states only th
 one thing it adds:
 
     worker  = authenticated, active                     (§5 rows 1-2)
-    admin   = worker AND (is_admin OR is_root)          (§5 rows 3-6, root inherits)
-    root    = worker AND is_root                        (§5 rows 7-8)
+    admin   = worker AND has_admin_capability(user)     (§5 rows 3-6, root inherits)
+    root    = worker AND has_root_capability(user)      (§5 rows 7-8)
+
+The matrix rows themselves live in `app.permissions`; this module adds only
+"authenticated and active" plus the 401/403. `GET /me` advertises the same rows
+through the same predicates (§7), so what the UI offers and what the API allows
+cannot drift apart.
 
 New routes pick a tier; they do not re-implement one.
 """
@@ -22,6 +27,7 @@ from sqlalchemy.orm import Session as DbSession
 from app.config import settings
 from app.db import get_session
 from app.models import User
+from app.permissions import has_admin_capability, has_root_capability
 from app.security import unsign_token
 from app.sessions import resolve_session_user
 
@@ -61,9 +67,10 @@ def require_worker(
 def require_admin(user: Annotated[User, Depends(require_worker)]) -> User:
     """§5: admin capabilities (solve, override, all submissions, audit).
 
-    Root passes: "Root inherits all admin capabilities" (§5).
+    Root passes: "Root inherits all admin capabilities" (§5) — see
+    `has_admin_capability`, which is also what /me reports these rows from.
     """
-    if not (user.is_admin or user.is_root):
+    if not has_admin_capability(user):
         raise _FORBIDDEN
     return user
 
@@ -75,7 +82,7 @@ def require_root(user: Annotated[User, Depends(require_worker)]) -> User:
     extra", it is its own row in the matrix, and is_admin must never be a path to
     root.
     """
-    if not user.is_root:
+    if not has_root_capability(user):
         raise _FORBIDDEN
     return user
 

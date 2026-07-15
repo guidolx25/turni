@@ -13,6 +13,7 @@ from __future__ import annotations
 from sqlalchemy import Select, select
 
 from app.models import User
+from app.permissions import has_root_capability
 
 
 def visible_users_stmt(viewer: User | None) -> Select[tuple[User]]:
@@ -22,6 +23,11 @@ def visible_users_stmt(viewer: User | None) -> Select[tuple[User]]:
     Returns a composable SELECT; callers add their own filters/ordering.
     """
     stmt = select(User)
-    if viewer is not None and viewer.is_root:
+    # Who may see root is §5's last matrix row — the same row /me reports as
+    # `capabilities.see_root_account`. Both resolve it through the predicate, so
+    # the filter and the advertisement cannot drift into disagreeing about who
+    # root is visible to. The `is_root` column read below is the *subject* of the
+    # filter, not a tier decision.
+    if viewer is not None and has_root_capability(viewer):
         return stmt
     return stmt.where(User.is_root.is_(False))
