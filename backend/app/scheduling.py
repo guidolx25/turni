@@ -61,10 +61,20 @@ def window_deadline(monday_date: dt.date) -> dt.datetime:
 
 
 def is_submittable(week: Week, now: dt.datetime | None = None) -> bool:
-    """§3.1: constraints are editable only while the week is open AND its Sunday
-    17:00 deadline has not passed. `now` defaults to the current UTC instant."""
+    """§3.1: constraints are editable only while the week is open, no solve has
+    run, AND its Sunday 17:00 deadline has not passed. `now` defaults to now (UTC).
+
+    The `solved_at` guard is what "Generate now marks the window closed early"
+    (§3.2) means mechanically: once a solve runs, submissions stop immediately —
+    ahead of the deadline if an admin generated early — so the solved schedule
+    cannot be invalidated by a late edit.
+    """
     moment = now or utcnow()
-    return week.status is WeekStatus.OPEN and moment < window_deadline(week.monday_date)
+    return (
+        week.status is WeekStatus.OPEN
+        and week.solved_at is None
+        and moment < window_deadline(week.monday_date)
+    )
 
 
 def get_or_create_week(db: DbSession, monday_date: dt.date) -> Week:

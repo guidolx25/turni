@@ -13,10 +13,21 @@ import datetime as dt
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.enums import ConstraintKind, ConstraintSlot, Day, Language, UserRole, WeekStatus
-from app.models import Constraint, User, Week
+from app.enums import (
+    AssignmentRole,
+    AssignmentSlot,
+    AssignmentSource,
+    ConstraintKind,
+    ConstraintSlot,
+    Day,
+    Language,
+    UserRole,
+    WeekStatus,
+)
+from app.models import Assignment, Constraint, User, Week
 from app.permissions import has_admin_capability, has_root_capability
 from app.scheduling import window_deadline
+from app.solver import PersonalConstraint, SolverResult
 
 
 class LoginIn(BaseModel):
@@ -195,4 +206,95 @@ class ConstraintOut(BaseModel):
             note=constraint.note,
             created_at=constraint.created_at,
             updated_at=constraint.updated_at,
+        )
+
+
+class ScheduleAssignmentOut(BaseModel):
+    """One worked slot in a published schedule (§7 `GET /schedule`).
+
+    Carries the worker's `display_name` so the grid needs no second lookup, but
+    never `is_root`: root (Matteo) appears here as an ordinary bagnino — his shifts
+    are real coverage — while his root role stays invisible (§5)."""
+
+    day: Day
+    slot: AssignmentSlot
+    role: AssignmentRole
+    user_id: int
+    user_name: str
+    source: AssignmentSource
+
+    @classmethod
+    def from_model(cls, assignment: Assignment) -> ScheduleAssignmentOut:
+        return cls(
+            day=assignment.day,
+            slot=assignment.slot,
+            role=assignment.role,
+            user_id=assignment.user_id,
+            user_name=assignment.user.display_name,
+            source=assignment.source,
+        )
+
+
+class ScheduleOut(BaseModel):
+    """A week's schedule (§7 `GET /schedule`): its lifecycle state plus every
+    worked slot, weekday (solver) and weekend (template) alike."""
+
+    monday_date: dt.date
+    status: WeekStatus
+    assignments: list[ScheduleAssignmentOut]
+
+
+class BlockingConstraintOut(BaseModel):
+    """A hard constraint named as blocking on an INFEASIBLE solve (§2.3). Feeds the
+    sacrifice-flow proposal, so it echoes exactly which (worker, day, slot) conflicts."""
+
+    worker_id: int
+    day: Day
+    slot: ConstraintSlot
+    kind: ConstraintKind
+
+    @classmethod
+    def from_constraint(cls, c: PersonalConstraint) -> BlockingConstraintOut:
+        return cls(worker_id=c.worker_id, day=c.day, slot=c.slot, kind=c.kind)
+
+
+class ObjectiveBreakdownOut(BaseModel):
+    """Per-tier objective values on a feasible solve (§8 logging / admin view)."""
+
+    soft_unmet: int
+    alternation_breaks: int
+    fairness_deviation: int
+    spread_shared_pairs: int
+    jolly_days: int
+    weighted_total: int
+
+
+class SolveResultOut(BaseModel):
+    """`POST /admin/solve` outcome (§7). Feasible carries the objective breakdown;
+    INFEASIBLE carries the blocking constraints for the §2.3 sacrifice flow."""
+
+    status: str
+    solve_seconds: float
+    objective: ObjectiveBreakdownOut | None
+    blocking_constraints: list[BlockingConstraintOut]
+
+    @classmethod
+    def from_result(cls, result: SolverResult) -> SolveResultOut:
+        objective = None
+        if result.objective is not None:
+            objective = ObjectiveBreakdownOut(
+                soft_unmet=result.objective.soft_unmet,
+                alternation_breaks=result.objective.alternation_breaks,
+                fairness_deviation=result.objective.fairness_deviation,
+                spread_shared_pairs=result.objective.spread_shared_pairs,
+                jolly_days=result.objective.jolly_days,
+                weighted_total=result.objective.weighted_total,
+            )
+        return cls(
+            status=result.status.value,
+            solve_seconds=result.solve_seconds,
+            objective=objective,
+            blocking_constraints=[
+                BlockingConstraintOut.from_constraint(c) for c in result.blocking_constraints
+            ],
         )

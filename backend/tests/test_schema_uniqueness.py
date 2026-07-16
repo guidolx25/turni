@@ -42,12 +42,13 @@ def test_weeks_accepts_distinct_mondays(connection: Connection) -> None:
     assert connection.execute(text("SELECT count(*) FROM weeks")).scalar_one() == 2
 
 
-def test_h1_one_holder_per_week_day_slot_role(connection: Connection) -> None:
-    """§6 assignments UNIQUE(week_id, day, slot, role).
+def test_h1_one_holder_per_weekday_slot_role(connection: Connection) -> None:
+    """§6 assignments UNIQUE(week_id, day, slot, role) WHERE day IN (mon..fri).
 
     This is H1's "exactly one bagnino and exactly one spiaggino per slot" held by
-    the database rather than by the solver: two people cannot occupy the same
-    role in the same slot even if a swap or an override tried to write it.
+    the database rather than by the solver, for the Mon–Fri rows it governs: two
+    people cannot occupy the same role in the same weekday slot even if a swap or
+    an override tried to write it.
     """
     week_id = make_week(connection)
     matteo = make_user(connection, username="matteo")
@@ -59,6 +60,31 @@ def test_h1_one_holder_per_week_day_slot_role(connection: Connection) -> None:
         make_assignment(
             connection, user_id=francesco, week_id=week_id, day="mon", slot="am", role="bagnino"
         )
+
+
+@pytest.mark.parametrize("weekend_day", ["sat", "sun"])
+def test_weekend_slot_allows_two_spiaggini(connection: Connection, weekend_day: str) -> None:
+    """§6 (amended): the unique index is weekday-only, so it exempts weekend rows.
+
+    H5 puts BOTH spiaggini (Pasha and Amir) in the same Sat/Sun slot full-day; a
+    table-wide UNIQUE(week, day, slot, role) would reject the second. The weekday
+    scope lets them coexist — their integrity comes from `emit_weekend_template`
+    being the sole writer, not from the DB key.
+    """
+    week_id = make_week(connection)
+    pasha = make_user(connection, username="pasha", role="spiaggino")
+    amir = make_user(connection, username="amir", role="spiaggino")
+    for uid in (pasha, amir):
+        make_assignment(
+            connection,
+            user_id=uid,
+            week_id=week_id,
+            day=weekend_day,
+            slot="am",
+            role="spiaggino",
+            source="weekend_template",
+        )
+    assert connection.execute(text("SELECT count(*) FROM assignments")).scalar_one() == 2
 
 
 @pytest.mark.parametrize(

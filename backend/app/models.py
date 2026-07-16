@@ -19,10 +19,12 @@ from sqlalchemy import (
     Boolean,
     Date,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -179,9 +181,21 @@ class Assignment(Base):
     )
 
     __table_args__ = (
-        # §6: exactly one holder per (week, day, slot, role) — this is H1's
-        # coverage uniqueness enforced by the database, not just the solver.
-        UniqueConstraint("week_id", "day", "slot", "role"),
+        # §6: exactly one holder per (week, day, slot, role) — H1's coverage
+        # uniqueness enforced by the database, not just the solver. Scoped to
+        # Mon–Fri: the H5 weekend template deliberately has TWO spiaggini per slot
+        # (Pasha and Amir full-day), which a table-wide key would reject, so
+        # weekend rows are exempt and their integrity comes from
+        # `emit_weekend_template` being their sole writer.
+        Index(
+            "uq_assignments_weekday_slot",
+            "week_id",
+            "day",
+            "slot",
+            "role",
+            unique=True,
+            sqlite_where=text("day IN ('mon', 'tue', 'wed', 'thu', 'fri')"),
+        ),
     )
 
     week: Mapped[Week] = relationship(back_populates="assignments")

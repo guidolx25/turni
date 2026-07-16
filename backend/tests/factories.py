@@ -77,3 +77,19 @@ def create_root(db: DbSession, username: str = "matteo") -> User:
     nothing about inheritance.
     """
     return create_user(db, username, role=UserRole.BAGNINO, is_root=True)
+
+
+def create_full_roster(db: DbSession) -> dict[str, User]:
+    """§1 roster the solver needs: 2 core bagnini (Matteo is also root), 2 core
+    spiaggini, 1 jolly (Mattia, the admin). Mirrors `app.seed.SEED_ACCOUNTS` but
+    with the shared fast test password. Inserted Matteo-first so his id is lowest —
+    the weekend-template tiebreak (§H5) then puts him on Sat-AM / Sun-PM as the
+    golden week shows. Returned keyed by username for readable assertions.
+    """
+    return {
+        "matteo": create_user(db, "matteo", role=UserRole.BAGNINO, is_root=True),
+        "francesco": create_user(db, "francesco", role=UserRole.BAGNINO),
+        "pasha": create_user(db, "pasha", role=UserRole.SPIAGGINO),
+        "amir": create_user(db, "amir", role=UserRole.SPIAGGINO),
+        "mattia": create_user(db, "mattia", role=UserRole.JOLLY, is_admin=True),
+    }

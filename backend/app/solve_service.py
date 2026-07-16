@@ -1,0 +1,154 @@
+"""The DB ↔ solver adapter (spec §8): map §6 rows onto the pure `solve()` and back.
+
+The solver (`app.solver`) is deliberately pure — no DB, no I/O. This module is the
+one place §6 `users`/`constraints`/`solver_state` rows become a `SolverInput`, and
+the returned `SlotAssignment`s (plus the fixed H5 weekend template) become §6
+`assignments` rows. Keeping the mapping here means the solver never learns about
+SQLAlchemy and the routes never learn about CP-SAT.
+
+Roster note (§5): the solve roster is every ACTIVE user, *including* root (Matteo
+is a working core bagnino). Root invisibility hides the root *role* from user
+lists, pickers and role-based fan-out — not the duty roster. So this is one of the
+few `select(User)` sites that deliberately does NOT go through `visible_users_stmt`.
+"""
+
+from __future__ import annotations
+
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session as DbSession
+
+from app.db import utcnow
+from app.enums import AssignmentSource, UserRole
+from app.models import Assignment, Constraint, SolverState, User, Week
+from app.solver import (
+    PersonalConstraint,
+    PriorSlot,
+    SolverInput,
+    SolverResult,
+    SolverStatus,
+    WorkerRef,
+    emit_weekend_template,
+    solve,
+)
+from app.solver.weights import DEFAULT_WEIGHTS
+
+# Assignment rows this module owns and replaces on every (re)solve. Swap/override
+# rows (§4/§5) are authored elsewhere and must survive a regenerate untouched.
+_GENERATED_SOURCES = (AssignmentSource.SOLVER, AssignmentSource.WEEKEND_TEMPLATE)
+
+
+def build_roster(db: DbSession) -> tuple[WorkerRef, ...]:
+    """The duty roster the solver sees: every active user as a `WorkerRef`, by id.
+
+    `is_core`/`is_jolly` key off role, never identity (§1): the jolly is the swing
+    worker, everyone else is a core worker with an H3 free day. Root is included —
+    it is a working member (see module docstring).
+    """
+    users = db.scalars(select(User).where(User.active.is_(True)).order_by(User.id)).all()
+    return tuple(
+        WorkerRef(
+            id=u.id,
+            display_name=u.display_name,
+            role=u.role,
+            is_core=u.role is not UserRole.JOLLY,
+            is_jolly=u.role is UserRole.JOLLY,
+        )
+        for u in users
+    )
+
+
+def build_solver_input(
+    db: DbSession,
+    week: Week,
+    roster: tuple[WorkerRef, ...],
+    free_day_pins: dict[int, object] | None = None,
+) -> SolverInput:
+    """Assemble the pure `SolverInput` for `week` from §6 rows.
+
+    `free_day_pins` is empty for a normal solve; the §2.3 sacrifice re-solve passes
+    a worker's newly accepted free day here to re-run under that pin.
+    """
+    constraints = tuple(
+        PersonalConstraint(worker_id=c.user_id, day=c.day, slot=c.slot, kind=c.kind)
+        for c in db.scalars(select(Constraint).where(Constraint.week_id == week.id)).all()
+    )
+    return SolverInput(
+        week_monday=week.monday_date,
+        roster=roster,
+        constraints=constraints,
+        free_day_pins=free_day_pins or {},
+        prior_state=_load_prior_state(db),
+        weights=DEFAULT_WEIGHTS,
+    )
+
+
+def run_solve(
+    db: DbSession, week: Week, free_day_pins: dict[int, object] | None = None
+) -> SolverResult:
+    """Solve `week` and persist the outcome (§3.2, §8).
+
+    Always stamps `solved_at` (the solve ran — the window is closed, §3.2). On a
+    feasible result, replaces the generated assignment rows with the new schedule
+    plus the fixed H5 weekend template. On INFEASIBLE, writes no assignments and
+    leaves the blocking constraints on the result for the §2.3 sacrifice flow.
+    """
+    roster = build_roster(db)
+    result = solve(build_solver_input(db, week, roster, free_day_pins))
+
+    if result.status is not SolverStatus.INFEASIBLE:
+        _replace_generated_assignments(db, week, roster, result)
+    week.solved_at = utcnow()
+    db.commit()
+    return result
+
+
+def _load_prior_state(db: DbSession) -> dict[int, PriorSlot]:
+    """§2.2 cross-week seed from persisted `solver_state`.
+
+    A stored row with a NULL `last_worked_slot` is the FULL_DAY boundary the single
+    am/pm column cannot hold (the two full-weekend workers); a present am/pm value
+    maps straight across. A user with no row is absent → no boundary term. On a
+    first-ever week the table is empty, so every worker is absent — the known,
+    carried-forward first-week limitation of the S2 spread term.
+    """
+    prior: dict[int, PriorSlot] = {}
+    for st in db.scalars(select(SolverState)).all():
+        if st.last_worked_slot is None:
+            prior[st.user_id] = PriorSlot.FULL_DAY
+        else:
+            prior[st.user_id] = PriorSlot(st.last_worked_slot.value)
+    return prior
+
+
+def _replace_generated_assignments(
+    db: DbSession, week: Week, roster: tuple[WorkerRef, ...], result: SolverResult
+) -> None:
+    """Idempotent (re)generate: drop this week's solver + weekend-template rows and
+    write the fresh set. Swap/override rows are left untouched (§4/§5)."""
+    db.execute(
+        delete(Assignment).where(
+            Assignment.week_id == week.id, Assignment.source.in_(_GENERATED_SOURCES)
+        )
+    )
+    for a in result.assignments:
+        db.add(
+            Assignment(
+                week_id=week.id,
+                day=a.day,
+                slot=a.slot,
+                role=a.role,
+                user_id=a.worker_id,
+                source=AssignmentSource.SOLVER,
+            )
+        )
+    for wa in emit_weekend_template(roster, week.monday_date):
+        db.add(
+            Assignment(
+                week_id=week.id,
+                day=wa.day,
+                slot=wa.slot,
+                role=wa.role,
+                user_id=wa.worker_id,
+                source=AssignmentSource.WEEKEND_TEMPLATE,
+            )
+        )

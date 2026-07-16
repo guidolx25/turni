@@ -118,7 +118,12 @@ constraints(id, user_id, week_id, day ENUM(mon..sun), slot ENUM(am,pm,full_day),
 
 assignments(id, week_id, day, slot ENUM(am,pm), role ENUM(bagnino,spiaggino),
             user_id, source ENUM(solver,weekend_template,swap,override),
-            UNIQUE(week_id, day, slot, role))
+            UNIQUE(week_id, day, slot, role) WHERE day IN (mon..fri))
+            -- Weekday-only uniqueness: H1 gives exactly one holder per role per
+            -- Mon–Fri slot. The H5 weekend template deliberately has TWO
+            -- spiaggini per slot (Pasha and Amir full-day Sat+Sun), which that
+            -- key would forbid, so weekend rows are exempt; their integrity comes
+            -- from emit_weekend_template being the sole writer of them.
 
 swap_requests(id, week_id, from_user, to_user, from_assignment, to_assignment,
               status ENUM(pending,accepted,rejected,expired,pending_admin,applied),
