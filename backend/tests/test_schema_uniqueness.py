@@ -146,14 +146,18 @@ def test_solver_state_allows_one_row_per_user(connection: Connection) -> None:
     for the same worker is impossible — no surrogate id can hide a duplicate."""
     user_id = make_user(connection)
     connection.execute(
-        text("INSERT INTO solver_state (user_id, last_worked_slot, last_worked_date)"
-             " VALUES (:u, 'pm', '2026-07-12')"),
+        text(
+            "INSERT INTO solver_state (user_id, last_worked_slot, last_worked_date)"
+            " VALUES (:u, 'pm', '2026-07-12')"
+        ),
         {"u": user_id},
     )
     with pytest.raises(IntegrityError):
         connection.execute(
-            text("INSERT INTO solver_state (user_id, last_worked_slot, last_worked_date)"
-                 " VALUES (:u, 'am', '2026-07-12')"),
+            text(
+                "INSERT INTO solver_state (user_id, last_worked_slot, last_worked_date)"
+                " VALUES (:u, 'am', '2026-07-12')"
+            ),
             {"u": user_id},
         )
 
@@ -184,7 +188,9 @@ def test_constraint_requires_an_existing_week(connection: Connection) -> None:
 def test_notification_requires_an_existing_user(connection: Connection) -> None:
     with pytest.raises(IntegrityError):
         connection.execute(
-            text("INSERT INTO notifications (user_id, event_type, read, created_at)"
-                 " VALUES (999999, 'schedule_published', 0, :ts)"),
+            text(
+                "INSERT INTO notifications (user_id, event_type, read, created_at)"
+                " VALUES (999999, 'schedule_published', 0, :ts)"
+            ),
             {"ts": FIXED_TS},
         )

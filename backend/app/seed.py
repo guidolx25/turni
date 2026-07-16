@@ -108,8 +108,7 @@ def seed_accounts(db: DbSession, *, out: TextIO = sys.stdout) -> list[User]:
             print(f"created: {account.username} — generated password: {password}", file=out)
         else:
             print(
-                f"created: {account.username} — password from "
-                f"{password_env_var(account.username)}",
+                f"created: {account.username} — password from {password_env_var(account.username)}",
                 file=out,
             )
 
