@@ -57,12 +57,79 @@ def test_blocking_coverage_is_infeasible() -> None:
 
 
 def test_blocking_constraints_names_the_responsible_set() -> None:
-    """§2.3 step 1: attribution names the three Monday bagnino blocks (the real
-    conflict) and does NOT name the innocent, satisfiable Pasha/Friday request —
-    §2.3 proposes the sacrifice to *that* worker, so an innocent bystander in the
-    blocking set would misdirect the proposal."""
+    """§2.3 step 1: attribution returns ONE provably-minimal unsat core.
+
+    SEMANTICS CHANGE (user-directed, not editing-to-pass): the old "union of
+    minimal cores" helper was proven buggy at a gate review — its greedy shrink
+    stranded and DROPPED a genuine culprit in multi-conflict instances — and the
+    user ruled it deleted in favour of a single minimal core per solve. §2.3's
+    sacrifice flow is inherently iterative (propose to one worker → accept/pin →
+    re-solve), so a minimal core (not a union) is the correct unit: it names the
+    smallest sacrifice that unblocks *this* solve, and the next core surfaces on
+    the next iteration (see ``test_blocking_core_iterates_to_the_other`` below).
+
+    Monday needs a bagnino AM and PM; all three bagnini (Matteo, Francesco, jolly
+    Mattia) are blocked, so any TWO of them make Monday uncoverable — two symmetric
+    size-2 cores: {Mattia, Matteo} and {Mattia, Francesco}. A minimal core is
+    therefore exactly Mattia + one core bagnino, and never the innocent, satisfiable
+    Pasha/Friday request (minimality excludes bystanders by construction)."""
     res = _result()
     blocking = set(res.blocking_constraints)
     assert blocking, "INFEASIBLE with empty attribution cannot drive the sacrifice flow"
-    assert set(_BAGNINO_BLOCKS) <= blocking  # the responsible constraints are named
-    assert _INNOCENT not in blocking  # no innocent bystander → correct §2.3 targeting
+
+    # A genuine minimal core: a subset of the input hard constraints...
+    inputs = {*_BAGNINO_BLOCKS, _INNOCENT}
+    assert blocking <= inputs
+    # ...that is exactly size 2 — Mattia plus exactly one of {Matteo, Francesco}...
+    assert len(blocking) == 2
+    mattia_block = _BAGNINO_BLOCKS[2]
+    bagnino_blocks = {_BAGNINO_BLOCKS[0], _BAGNINO_BLOCKS[1]}
+    assert mattia_block in blocking  # the jolly is in every Monday-coverage core
+    assert len(blocking & bagnino_blocks) == 1  # exactly one symmetric core bagnino
+    # ...and never the innocent bystander (minimality excludes it).
+    assert _INNOCENT not in blocking
+
+    # And it IS a core: unblocking exactly these restores feasibility.
+    survivors = tuple(c for c in (*_BAGNINO_BLOCKS, _INNOCENT) if c not in blocking)
+    unblocked = solve(
+        SolverInput(
+            week_monday=WEEK_MONDAY,
+            roster=roster(),
+            constraints=survivors,
+            prior_state=canonical_prior_state(),
+            weights=WEIGHTS,
+        )
+    )
+    assert unblocked.status is not SolverStatus.INFEASIBLE
+
+
+def test_blocking_core_iterates_to_the_other() -> None:
+    """§2.3 iterate-per-core: unblocking the named core bagnino and re-solving
+    surfaces the OTHER symmetric minimal core, so multi-conflict instances resolve
+    through iteration rather than a single (buggy) union. Mattia — in every Monday
+    core — stays named; the still-blocked core bagnino replaces the unblocked one."""
+    first = _result()
+    first_core = set(first.blocking_constraints)
+    mattia_block = _BAGNINO_BLOCKS[2]
+    bagnino_blocks = {_BAGNINO_BLOCKS[0], _BAGNINO_BLOCKS[1]}
+    (named_bagnino,) = first_core & bagnino_blocks
+
+    # Unblock the named bagnino (§2.3 accept → sacrifice that constraint); the
+    # rest, including Mattia and the other bagnino, still block Monday coverage.
+    remaining = tuple(c for c in (*_BAGNINO_BLOCKS, _INNOCENT) if c is not named_bagnino)
+    second = solve(
+        SolverInput(
+            week_monday=WEEK_MONDAY,
+            roster=roster(),
+            constraints=remaining,
+            prior_state=canonical_prior_state(),
+            weights=WEIGHTS,
+        )
+    )
+    assert second.status is SolverStatus.INFEASIBLE
+    second_core = set(second.blocking_constraints)
+    assert len(second_core) == 2
+    assert mattia_block in second_core
+    other_bagnino = (bagnino_blocks - {named_bagnino}).pop()
+    assert other_bagnino in second_core
+    assert named_bagnino not in second_core

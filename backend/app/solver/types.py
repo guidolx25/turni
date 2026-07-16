@@ -108,16 +108,22 @@ class PersonalConstraint:
 
 @dataclass(frozen=True)
 class Weights:
-    """The three lexicographic soft-objective weights (§2.2): W1 (S1 soft
-    requests) >> W2 (S2 alternation + fairness) >> W3 (S3 Mattia clustering).
+    """The lexicographic soft-objective weights (§2.2): W1 (S1 soft requests) >>
+    {W2, W2_SPREAD} (S2 band) >> W3 (S3 Mattia clustering).
+
+    The S2 band carries two coefficients: ``w2`` for alternation breaks + AM/PM
+    fairness deviation, and ``w2_spread`` for the rest-spread term (full-weekend
+    worker pairs sharing a free day). ``w2_spread`` sits above a single ``w2``
+    alternation unit but far below ``w1`` (§2.2).
 
     Field carrier only — the actual constants and the separation arithmetic live
-    in the model step, not in this interface module.
+    in ``app.solver.weights``, not in this interface module.
     """
 
     w1: int
     w2: int
     w3: int
+    w2_spread: int = 0
 
 
 @dataclass(frozen=True)
@@ -137,9 +143,9 @@ class SolverInput:
     # S2 cross-week seed: worker id → last-worked boundary. Absent = no prior
     # state (legal first-ever week). See PriorSlot for the FULL_DAY case.
     prior_state: Mapping[int, PriorSlot] = field(default_factory=dict)
-    # W1/W2/W3 (§2.2). Defaulted to zero so callers must set real weights; the
-    # model step owns the well-separated constants.
-    weights: Weights = Weights(0, 0, 0)
+    # W1/W2/W2_SPREAD/W3 (§2.2). Defaulted to zero so callers must set real
+    # weights; the model step owns the well-separated constants.
+    weights: Weights = Weights(0, 0, 0, 0)
 
 
 @dataclass(frozen=True)
@@ -161,12 +167,15 @@ class ObjectiveBreakdown:
     tier is a separate named field (not a single blended score).
 
     `weighted_total == w1*soft_unmet + w2*(alternation_breaks + fairness_deviation)
-    + w3*jolly_days`, with the input Weights — the same value CP-SAT minimizes.
+    + w2_spread*spread_shared_pairs + w3*jolly_days`, with the input Weights — the
+    same value CP-SAT minimizes.
     """
 
     soft_unmet: int  # S1 (W1): count of unmet soft personal requests.
     alternation_breaks: int  # S2 (W2): same-slot consecutive worked-day pairs.
     fairness_deviation: int  # S2 (W2): Σ over workers of |#AM − #PM| this week.
+    # S2 (W2_SPREAD): count of full-weekend worker pairs sharing a free day.
+    spread_shared_pairs: int
     jolly_days: int  # S3 (W3): count of days the jolly worker works ≥ 1 slot.
     weighted_total: int
 

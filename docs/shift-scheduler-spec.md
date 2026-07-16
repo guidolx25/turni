@@ -42,9 +42,10 @@ A bilingual (IT/EN) web platform that schedules weekly shifts for a beach establ
 2. **S2 — Alternation + AM/PM fairness** (weight `W2`, one combined tier):
    - *Alternation (continuous flow):* penalty for each pair of consecutive worked days with the same slot, **including the boundary with the previous week** (each worker's last worked slot is persisted in `solver_state`). Note: the fixed weekend seeds Monday — Matteo exits Sunday on PM (prefers Mon AM), Francesco exits on AM (prefers Mon PM).
    - *Fairness:* penalty on |#AM − #PM| per worker per week.
-3. **S3 — Mattia free-day clustering** (weight `W3`): **prefer pairing** core workers' free days on the same day(s), so Mattia doubles on fewer days and gets full days off (observed pattern: two pairs → two Mattia full days off, typically Tuesday). Do **not** hardcode a preferred day. `W3` must be an easily editable named constant with a comment noting this tier is expected to change.
+   - *Rest spread (full-weekend workers)* (weight `W2_SPREAD`, in the S2 band): penalty for each pair of workers who work the full weekend template — both Saturday and Sunday full-day, i.e. the two full-day spiaggini — that shares the same free day, so their role is never left covered by the jolly alone for a whole day. `W2_SPREAD` is sized so that co-locating such a pair is dispreferred to the one alternation break splitting them incurs (and thus also outweighs the S3 clustering pull below). Name-agnostic: the pair is selected by weekend-template membership, never by identity. Empirically confirmed across observed weeks — the two full-weekend workers always split their free days (one Monday, one Tuesday) rather than both resting Monday, accepting that the jolly may work an extra day.
+3. **S3 — Mattia free-day clustering** (weight `W3`): **prefer pairing** core workers' free days on the same day(s), so Mattia doubles on fewer days and gets full days off (observed pattern: two pairs → two Mattia full days off, typically Tuesday). Do **not** hardcode a preferred day. This general pairing preference yields to the S2 rest-spread term above for the two full-weekend workers, who are spread rather than clustered. `W3` must be an easily editable named constant with a comment noting this tier is expected to change.
 
-Weight separation: `W1 >> W2 >> W3` (e.g., 10 000 / 100 / 1). Document in code.
+Weight separation: `W1 >> {W2, W2_SPREAD} >> W3` (e.g., 10 000 / 100 / 200 / 1 — `W2_SPREAD` sits in the S2 band: above a single `W2` alternation unit but far below `W1`). Document in code.
 
 ### 2.3 Sacrifice flow (infeasibility resolution)
 
@@ -186,7 +187,7 @@ Auth: `argon2` password hashing, server-side sessions (signed cookie, `HttpOnly`
 
 **Constraints:** direct encodings of H1–H7. Hard personal constraints enter as **assumption literals** so infeasibility explanations name the responsible constraint (feeds the sacrifice flow).
 
-**Objective:** minimize `W1·(unmet soft requests) + W2·(alternation breaks + fairness deviation) + W3·(days on which Mattia works ≥ 1 slot)` — note S3 is expressed as *minimizing Mattia's worked days*, which is equivalent to maximizing his full free days and induces free-day pairing.
+**Objective:** minimize `W1·(unmet soft requests) + W2·(alternation breaks + fairness deviation) + W2_SPREAD·(full-weekend worker pairs sharing a free day) + W3·(days on which Mattia works ≥ 1 slot)` — note S3 is expressed as *minimizing Mattia's worked days*, which is equivalent to maximizing his full free days and induces free-day pairing (except for the two full-weekend workers, whom the `W2_SPREAD` term spreads apart).
 
 **State:** after publish, write each worker's `last_worked_slot`/`last_worked_date` (Sunday PM for Matteo, etc., from the weekend template) into `solver_state`.
 

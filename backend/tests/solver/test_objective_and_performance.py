@@ -50,13 +50,15 @@ def test_objective_breakdown_is_present_on_a_feasible_solve() -> None:
 
 def test_weighted_total_equals_the_lexicographic_sum() -> None:
     """§2.2/§8: weighted_total == w1·soft_unmet + w2·(alternation_breaks +
-    fairness_deviation) + w3·jolly_days, with the input weights."""
+    fairness_deviation) + w2_spread·spread_shared_pairs + w3·jolly_days, with the
+    input weights."""
     res = solve(_INPUT)
     assert res.objective is not None
     obj = res.objective
     expected = (
         WEIGHTS.w1 * obj.soft_unmet
         + WEIGHTS.w2 * (obj.alternation_breaks + obj.fairness_deviation)
+        + WEIGHTS.w2_spread * obj.spread_shared_pairs
         + WEIGHTS.w3 * obj.jolly_days
     )
     assert obj.weighted_total == expected
