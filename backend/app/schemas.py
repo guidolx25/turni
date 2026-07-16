@@ -13,9 +13,10 @@ import datetime as dt
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.enums import Language, UserRole
-from app.models import User
+from app.enums import ConstraintKind, ConstraintSlot, Day, Language, UserRole, WeekStatus
+from app.models import Constraint, User, Week
 from app.permissions import has_admin_capability, has_root_capability
+from app.scheduling import window_deadline
 
 
 class LoginIn(BaseModel):
@@ -127,4 +128,71 @@ class MeOut(UserOut):
         return cls(
             **UserOut.model_validate(user).model_dump(),
             capabilities=Capabilities.for_user(user),
+        )
+
+
+class WeekOut(BaseModel):
+    """A week's lifecycle state (§7 `GET /weeks`): its Monday, status, the derived
+    Sunday-17:00 submission deadline, and the solve/lock timestamps.
+
+    `submission_deadline` is *computed* (`app.scheduling.window_deadline`), not a
+    stored column — the frontend renders a countdown from it, so it must be the
+    same instant the lifecycle enforces, never a second copy.
+    """
+
+    monday_date: dt.date
+    status: WeekStatus
+    submission_deadline: dt.datetime
+    solved_at: dt.datetime | None
+    locked_at: dt.datetime | None
+
+    @classmethod
+    def from_week(cls, week: Week) -> WeekOut:
+        return cls(
+            monday_date=week.monday_date,
+            status=week.status,
+            submission_deadline=window_deadline(week.monday_date),
+            solved_at=week.solved_at,
+            locked_at=week.locked_at,
+        )
+
+
+class ConstraintIn(BaseModel):
+    """`POST /constraints` body (§7). The week is named by its Monday date — the
+    §6 natural key — not a surrogate id, so clients never depend on a lazily
+    created week row's id."""
+
+    week: dt.date
+    day: Day
+    slot: ConstraintSlot
+    kind: ConstraintKind
+    # §6 `constraints.note` is free text; bounded so a submission cannot smuggle a
+    # huge payload past the JSON column.
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ConstraintOut(BaseModel):
+    """One of the caller's own constraints (§7 `GET /constraints`). Echoes the
+    week by its Monday date to mirror `ConstraintIn`, so a round-trip is stable."""
+
+    id: int
+    week: dt.date
+    day: Day
+    slot: ConstraintSlot
+    kind: ConstraintKind
+    note: str | None
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+    @classmethod
+    def from_model(cls, constraint: Constraint) -> ConstraintOut:
+        return cls(
+            id=constraint.id,
+            week=constraint.week.monday_date,
+            day=constraint.day,
+            slot=constraint.slot,
+            kind=constraint.kind,
+            note=constraint.note,
+            created_at=constraint.created_at,
+            updated_at=constraint.updated_at,
         )

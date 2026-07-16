@@ -4,7 +4,7 @@ import logging
 
 from fastapi import FastAPI
 
-from app.routers import auth, root
+from app.routers import auth, constraints, root, weeks
 
 # Placeholder. Spec §11 requires structured logs and §8 requires solver runs
 # logged with duration + objective values; those messages contain quotes and
@@ -16,6 +16,8 @@ app = FastAPI(title="Turni", version="0.1.0")
 
 app.include_router(auth.router)
 app.include_router(root.router)
+app.include_router(weeks.router)
+app.include_router(constraints.router)
 
 
 @app.get("/healthz")
