@@ -244,6 +244,26 @@ class ScheduleOut(BaseModel):
     assignments: list[ScheduleAssignmentOut]
 
 
+class NotificationOut(BaseModel):
+    """One of the caller's own in-app notifications (§7 `GET /notifications`,
+    §10 Channel 1)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    event_type: str
+    payload: dict[str, object] | None
+    read: bool
+    created_at: dt.datetime
+
+
+class MarkReadIn(BaseModel):
+    """`POST /notifications/read` body (§7). `ids` omitted marks all the caller's
+    notifications read; a list marks exactly those (own rows only)."""
+
+    ids: list[int] | None = None
+
+
 class BlockingConstraintOut(BaseModel):
     """A hard constraint named as blocking on an INFEASIBLE solve (§2.3). Feeds the
     sacrifice-flow proposal, so it echoes exactly which (worker, day, slot) conflicts."""

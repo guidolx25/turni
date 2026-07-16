@@ -4,7 +4,7 @@ import logging
 
 from fastapi import FastAPI
 
-from app.routers import admin, auth, constraints, root, schedule, weeks
+from app.routers import admin, auth, constraints, notifications, root, schedule, weeks
 
 # Placeholder. Spec §11 requires structured logs and §8 requires solver runs
 # logged with duration + objective values; those messages contain quotes and
@@ -19,6 +19,7 @@ app.include_router(root.router)
 app.include_router(weeks.router)
 app.include_router(constraints.router)
 app.include_router(schedule.router)
+app.include_router(notifications.router)
 app.include_router(admin.router)
 
 
