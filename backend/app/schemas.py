@@ -21,10 +21,11 @@ from app.enums import (
     ConstraintSlot,
     Day,
     Language,
+    SacrificeStatus,
     UserRole,
     WeekStatus,
 )
-from app.models import Assignment, Constraint, User, Week
+from app.models import Assignment, Constraint, SacrificeProposal, User, Week
 from app.permissions import has_admin_capability, has_root_capability
 from app.scheduling import window_deadline
 from app.solver import PersonalConstraint, SolverResult
@@ -242,6 +243,29 @@ class ScheduleOut(BaseModel):
     monday_date: dt.date
     status: WeekStatus
     assignments: list[ScheduleAssignmentOut]
+
+
+class SacrificeProposalOut(BaseModel):
+    """A §2.3 sacrifice proposal as its target worker sees it (accept/decline).
+    Echoes the week by Monday date and the offered free day."""
+
+    id: int
+    week: dt.date
+    proposed_free_day: Day
+    status: SacrificeStatus
+    conflict_note: str | None
+    created_at: dt.datetime
+
+    @classmethod
+    def from_model(cls, proposal: SacrificeProposal) -> SacrificeProposalOut:
+        return cls(
+            id=proposal.id,
+            week=proposal.week.monday_date,
+            proposed_free_day=proposal.proposed_free_day,
+            status=proposal.status,
+            conflict_note=proposal.conflict_note,
+            created_at=proposal.created_at,
+        )
 
 
 class NotificationOut(BaseModel):

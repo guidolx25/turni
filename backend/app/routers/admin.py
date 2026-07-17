@@ -16,9 +16,11 @@ from sqlalchemy import select
 from app.deps import CurrentAdmin, DbDep
 from app.models import Week
 from app.publish_service import publish_week
+from app.sacrifice_service import open_sacrifice
 from app.scheduling import ERROR_NOT_MONDAY, get_or_create_week
 from app.schemas import SolveResultOut, WeekOut
 from app.solve_service import run_solve
+from app.solver import SolverStatus
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -40,7 +42,12 @@ def admin_solve(week: dt.date, admin: CurrentAdmin, db: DbDep) -> SolveResultOut
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=ERROR_NOT_MONDAY
         ) from exc
-    return SolveResultOut.from_result(run_solve(db, week_row))
+    result = run_solve(db, week_row)
+    if result.status is SolverStatus.INFEASIBLE:
+        # §2.3: open the sacrifice flow so an infeasible manual solve is never a
+        # dead end — it proposes a free-day move or escalates to the admin.
+        open_sacrifice(db, week_row, result)
+    return SolveResultOut.from_result(result)
 
 
 @router.post("/publish", response_model=WeekOut)

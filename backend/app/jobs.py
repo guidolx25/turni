@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session as DbSession
 from app.config import settings
 from app.enums import WeekStatus
 from app.publish_service import publish_week
+from app.sacrifice_service import open_sacrifice
 from app.scheduling import get_or_create_week
 from app.solve_service import run_solve
 from app.solver import SolverResult, SolverStatus
@@ -54,13 +55,14 @@ def run_weekly_solve(db: DbSession, now: dt.datetime) -> SolverResult | None:
 
     result = run_solve(db, week)
     if result.status is SolverStatus.INFEASIBLE:
-        # §2.3: cannot publish an infeasible week. Increment E opens the sacrifice
-        # flow here; until then the window is closed and an admin is alerted.
+        # §2.3: cannot publish an infeasible week — open the sacrifice flow (probe
+        # → propose to a core worker, or escalate to the admin). Never silent.
         logger.warning(
-            "weekly solve INFEASIBLE for %s: %d blocking constraint(s) — sacrifice flow required",
+            "weekly solve INFEASIBLE for %s: %d blocking constraint(s) — opening sacrifice flow",
             target,
             len(result.blocking_constraints),
         )
+        open_sacrifice(db, week, result)
         return result
 
     publish_week(db, week, actor=None)  # system action (§6: null audit actor)

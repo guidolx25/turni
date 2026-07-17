@@ -6,7 +6,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.routers import admin, auth, constraints, notifications, root, schedule, weeks
+from app.routers import (
+    admin,
+    auth,
+    constraints,
+    notifications,
+    root,
+    sacrifice,
+    schedule,
+    weeks,
+)
 from app.scheduler import build_scheduler
 
 # Placeholder. Spec §11 requires structured logs and §8 requires solver runs
@@ -39,6 +48,7 @@ app.include_router(weeks.router)
 app.include_router(constraints.router)
 app.include_router(schedule.router)
 app.include_router(notifications.router)
+app.include_router(sacrifice.router)
 app.include_router(admin.router)
 
 

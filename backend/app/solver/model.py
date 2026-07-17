@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
 
 from ortools.sat.python import cp_model
 
@@ -17,6 +18,7 @@ from app.enums import (
     AssignmentSlot,
     ConstraintKind,
     ConstraintSlot,
+    Day,
 )
 from app.solver.types import (
     FREE_DAYS,
@@ -46,6 +48,23 @@ def _single_role(worker: WorkerRef) -> AssignmentRole:
     return role
 
 
+def _free_domain(worker: WorkerRef, pins: Mapping[int, Day]) -> tuple[Day, ...]:
+    """The days `worker`'s single free day may fall on.
+
+    Normally Mon–Thu (H3). The §2.3 sacrifice extends one worker's domain to a
+    pinned *conflicted* day — a hard unavailability the standard domain can't
+    absorb, e.g. a Friday off (which H4 otherwise forces worked). Pinning the free
+    day there both creates the option and honors the hard request as a full day
+    off, rather than dropping it. Any pin already inside Mon–Thu leaves the domain
+    unchanged, so existing solves (and the golden test) are unaffected.
+    """
+    domain = list(FREE_DAYS)
+    pin = pins.get(worker.id)
+    if pin is not None and pin in SOLVER_DAYS and pin not in domain:
+        domain.append(pin)
+    return tuple(domain)
+
+
 def solve(inp: SolverInput) -> SolverResult:
     """Solve one week's Mon–Fri schedule (§8). Pure: no DB, no I/O.
 
@@ -67,11 +86,12 @@ def solve(inp: SolverInput) -> SolverResult:
                 for r in w.compatible_roles:
                     x[(w.id, d, s, r)] = model.NewBoolVar(f"x_{w.id}_{d}_{s}_{r}")
 
-    # free[(uid, day)] — core workers only, Mon–Thu (H3).
+    # free[(uid, day)] — core workers only, over each worker's free-day domain
+    # (Mon–Thu by H3, plus a §2.3-pinned conflicted day; see `_free_domain`).
     free: dict[tuple[int, object], cp_model.IntVar] = {}
     for w in roster:
         if w.is_core:
-            for d in FREE_DAYS:
+            for d in _free_domain(w, inp.free_day_pins):
                 free[(w.id, d)] = model.NewBoolVar(f"free_{w.id}_{d}")
 
     def works_slot(uid: int, d: object, s: AssignmentSlot) -> cp_model.LinearExpr:
@@ -94,16 +114,17 @@ def solve(inp: SolverInput) -> SolverResult:
                 for s in _SLOTS:
                     model.Add(sum(x[(w.id, d, s, r)] for r in w.compatible_roles) <= 1)
 
-    # --- H3: exactly one free day Mon–Thu; zero slots on it -------------------
+    # --- H3: exactly one free day in the domain; zero slots on it -------------
     for w in roster:
         if not w.is_core:
             continue
-        model.Add(sum(free[(w.id, d)] for d in FREE_DAYS) == 1)
+        domain = _free_domain(w, inp.free_day_pins)
+        model.Add(sum(free[(w.id, d)] for d in domain) == 1)
         # Pinned free day (golden test / §2.3 re-solve). H3 forces the rest to 0.
         pin = inp.free_day_pins.get(w.id)
-        if pin is not None and pin in FREE_DAYS:
+        if pin is not None and pin in domain:
             model.Add(free[(w.id, pin)] == 1)
-        for d in FREE_DAYS:
+        for d in domain:
             for s in _SLOTS:
                 for r in w.compatible_roles:
                     # On the free day the worker works zero slots.
@@ -114,12 +135,14 @@ def solve(inp: SolverInput) -> SolverResult:
         if not w.is_core:
             continue
         r_u = _single_role(w)
+        domain = _free_domain(w, inp.free_day_pins)
         for d in SOLVER_DAYS:
             worked = sum(x[(w.id, d, s, r_u)] for s in _SLOTS)
-            if d in FREE_DAYS:
+            if d in domain:
+                # A day this worker may rest on: worked iff it is not their free day.
                 model.Add(worked == 1 - free[(w.id, d)])
             else:
-                # Friday is never a free day (H3), so it is always worked.
+                # Not a free-day option (normally Fri, H3): always worked (H4).
                 model.Add(worked == 1)
 
     # H5 is NOT modelled (weekend template, emitted elsewhere).

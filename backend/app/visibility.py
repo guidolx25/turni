@@ -11,6 +11,7 @@ enumeration and does not belong here — root is visible to itself (§5).
 from __future__ import annotations
 
 from sqlalchemy import Select, select
+from sqlalchemy.orm import Session as DbSession
 
 from app.models import User
 from app.permissions import has_root_capability
@@ -31,3 +32,12 @@ def visible_users_stmt(viewer: User | None) -> Select[tuple[User]]:
     if viewer is not None and has_root_capability(viewer):
         return stmt
     return stmt.where(User.is_root.is_(False))
+
+
+def admin_recipients(db: DbSession) -> list[User]:
+    """Spec §5/§10: the visible admins for a *role-based* notification fan-out
+    (e.g. §2.3 escalation). Active admins with root excluded — routed through
+    `visible_users_stmt(None)` (a system viewer hides root) so this fan-out uses
+    the exact same exclusion every user listing does, not a parallel one."""
+    stmt = visible_users_stmt(None).where(User.is_admin.is_(True), User.active.is_(True))
+    return list(db.scalars(stmt).all())

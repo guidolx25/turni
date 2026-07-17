@@ -83,7 +83,12 @@ def test_weekly_solve_infeasible_does_not_publish(session: DbSession) -> None:
     assert result is not None and result.status.value == "infeasible"
     session.refresh(week)
     assert week.status is WeekStatus.OPEN  # not published
-    assert session.scalars(select(Notification)).all() == []  # no publish fan-out
+    # No schedule_published fan-out; the §2.3 flow may still notify (proposal or
+    # escalation), but nobody is told a schedule went live.
+    published = session.scalars(
+        select(Notification).where(Notification.event_type == "schedule_published")
+    ).all()
+    assert published == []
 
 
 def test_weekly_solve_skips_already_published_week(session: DbSession) -> None:
