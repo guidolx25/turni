@@ -1,9 +1,11 @@
 """Schedule read route (spec §7 `GET /schedule`, lifecycle §3.3).
 
-A week's schedule "becomes visible to all" only when it is published — i.e. locked
-(§3.3). Before that, an admin may preview the solved-but-unpublished grid (§3.2),
-but an ordinary worker sees nothing for that week yet. That visibility rule lives
-here; the assignment rows themselves are produced by the solve adapter (§8).
+A week's schedule "becomes visible to all" only when it is published — i.e.
+`locked` (§3.3). A `solved` week (window closed, schedule computed but not yet
+published, §3.2) is deliberately worker-invisible: visibility keys off `locked`,
+never `solved`. Before publish an admin may preview the solved grid, but an
+ordinary worker sees nothing for that week yet. That visibility rule lives here;
+the assignment rows themselves are produced by the solve adapter (§8).
 
 The response names workers (including root, who works — §5 hides the root *role*,
 not the roster), so it goes through `ScheduleAssignmentOut`, which structurally
@@ -34,9 +36,10 @@ _DAY_ORDER: dict[Day, int] = {d: i for i, d in enumerate(Day)}
 def get_schedule(week: dt.date, worker: CurrentWorker, db: DbDep) -> ScheduleOut:
     """§7: the week's worked slots (weekday solver rows + weekend template).
 
-    Visibility (§3.3): a locked week is visible to everyone; an unpublished one is
-    visible only to admins (preview). A worker querying an unpublished or unknown
-    week gets an empty schedule, not a leak of the draft.
+    Visibility (§3.3): a `locked` week is visible to everyone; an `open` or
+    `solved` week is visible only to admins (preview) — visibility keys off
+    `locked`, never `solved`. A worker querying an unpublished or unknown week gets
+    an empty schedule, not a leak of the draft.
     """
     week_row = db.scalar(select(Week).where(Week.monday_date == week))
     if week_row is None:

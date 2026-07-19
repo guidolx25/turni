@@ -6,10 +6,11 @@ and `app.scheduler` is the *when* (the APScheduler cron trigger). Keeping them
 apart means the whole behaviour is testable by calling `run_weekly_solve` with a
 fixed `now`, without standing up a scheduler or waiting on a clock.
 
-Auto-publish: a feasible scheduled solve publishes immediately (§3.2 → §3.3 in one
-Sunday-17:00 automation). An INFEASIBLE one stops short of publishing and is left
-for the §2.3 sacrifice flow (Increment E wires proposal creation into this branch);
-the manual admin path (`/admin/solve`, `/admin/publish`) covers the same ground.
+Auto-publish: a feasible scheduled solve publishes immediately — solve+publish in
+one Sunday-17:00 automation (§3.2 → §3.3) — *unless* a sacrifice is pending. An
+INFEASIBLE one stops short of publishing, opens the §2.3 sacrifice flow, and leaves
+the week parked in `solved` for resolution; the manual admin path (`/admin/solve`,
+`/admin/publish`) covers the same ground.
 """
 
 from __future__ import annotations
@@ -42,21 +43,26 @@ def upcoming_monday(now: dt.datetime) -> dt.date:
 
 
 def run_weekly_solve(db: DbSession, now: dt.datetime) -> SolverResult | None:
-    """§3.2/§3.3: solve — and on success publish — the upcoming week.
+    """§3.2/§3.3: solve — and on success atomically publish — the upcoming week,
+    unless a sacrifice is pending.
 
-    Idempotent: a week already locked (published) is skipped, so a re-fire never
-    disturbs a live schedule. Returns the solve result, or None when skipped.
+    Idempotent: only an `open` week is acted on. A week already `solved` (manually
+    generated and awaiting review, or parked with a pending/escalated sacrifice)
+    must NOT be re-solved or auto-published by a cron re-fire; a `locked` week is
+    done. Both are skipped, so a re-fire never disturbs a schedule mid-lifecycle.
+    Returns the solve result, or None when skipped.
     """
     target = upcoming_monday(now)
     week = get_or_create_week(db, target)
-    if week.status is WeekStatus.LOCKED:
-        logger.info("weekly solve skipped: week %s already published", target)
+    if week.status is not WeekStatus.OPEN:
+        logger.info("weekly solve skipped: week %s is %s, not open", target, week.status.value)
         return None
 
-    result = run_solve(db, week)
+    result = run_solve(db, week)  # OPEN → SOLVED (§3.2)
     if result.status is SolverStatus.INFEASIBLE:
         # §2.3: cannot publish an infeasible week — open the sacrifice flow (probe
-        # → propose to a core worker, or escalate to the admin). Never silent.
+        # → propose to a core worker, or escalate to the admin). The week stays
+        # parked in `solved`; never silent, never auto-published with a conflict.
         logger.warning(
             "weekly solve INFEASIBLE for %s: %d blocking constraint(s) — opening sacrifice flow",
             target,
@@ -65,6 +71,7 @@ def run_weekly_solve(db: DbSession, now: dt.datetime) -> SolverResult | None:
         open_sacrifice(db, week, result)
         return result
 
+    # Feasible: atomic solve+publish (SOLVED → LOCKED) — no sacrifice is pending.
     publish_week(db, week, actor=None)  # system action (§6: null audit actor)
     logger.info("weekly solve published %s (%s)", target, result.status.value)
     return result

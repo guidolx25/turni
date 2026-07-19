@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from app import audit
 from app.db import utcnow
-from app.enums import AssignmentSource, UserRole
+from app.enums import AssignmentSource, UserRole, WeekStatus
 from app.models import Assignment, Constraint, SolverState, User, Week
 from app.solver import (
     PersonalConstraint,
@@ -95,10 +95,14 @@ def run_solve(
 ) -> SolverResult:
     """Solve `week` and persist the outcome (§3.2, §8).
 
-    Always stamps `solved_at` (the solve ran — the window is closed, §3.2). On a
-    feasible result, replaces the generated assignment rows with the new schedule
-    plus the fixed H5 weekend template. On INFEASIBLE, writes no assignments and
-    leaves the blocking constraints on the result for the §2.3 sacrifice flow.
+    Always stamps `solved_at` and moves an OPEN week to `solved` (the solve ran,
+    the window is closed, §3.2): "the solver has run → status=solved". A `locked`
+    week is never downgraded, and a re-solve of an already-`solved` week stays
+    `solved` — the OPEN→SOLVED transition is one-way here. On a feasible result,
+    replaces the generated assignment rows with the new schedule plus the fixed H5
+    weekend template. On INFEASIBLE, writes no assignments and leaves the blocking
+    constraints on the result for the §2.3 sacrifice flow — the feasible/infeasible
+    distinction is carried by whether solver rows were written, not by the status.
 
     `actor` is the human who triggered the solve (admin/root), or None for the
     §11 cron. Every solve is audited (§5 audit log): the transition is recorded in
@@ -111,6 +115,8 @@ def run_solve(
     if result.status is not SolverStatus.INFEASIBLE:
         _replace_generated_assignments(db, week, roster, result)
     week.solved_at = utcnow()
+    if week.status is WeekStatus.OPEN:
+        week.status = WeekStatus.SOLVED
     audit.record(
         db,
         actor,

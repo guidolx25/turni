@@ -31,9 +31,19 @@ class Language(enum.StrEnum):
 
 
 class WeekStatus(enum.StrEnum):
-    """§6 weeks.status — 'open' accepts constraints, 'locked' is post-publish (§3)."""
+    """§6 weeks.status — the three §3 lifecycle states, in lifecycle order.
+
+    - open   = submission window open, constraints editable (§3.1).
+    - solved = window closed, solver has run; schedule computed but NOT yet
+               visible/published, OR a §2.3 sacrifice is pending. Reached by a
+               manual "Generate now" (awaits review) or by any solve that opens
+               the sacrifice flow. Visibility and fan-out never key off this
+               state — only `locked` (§3.2/§3.3).
+    - locked = published: schedule visible to all, slots locked, fan-out done (§3.3).
+    """
 
     OPEN = "open"
+    SOLVED = "solved"
     LOCKED = "locked"
 
 

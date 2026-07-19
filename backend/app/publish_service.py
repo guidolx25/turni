@@ -9,11 +9,10 @@ Everything here commits in one transaction: lock + solver_state + fan-out + audi
 land together, or not at all. The cron (Increment D) and the manual admin trigger
 both call `publish_week`, so the lifecycle has exactly one publish path.
 
-Note on §7: the API surface lists no publish endpoint, but §3.3 makes publish a
-required lifecycle step distinct from solve (an INFEASIBLE solve cannot publish).
-`POST /admin/publish` is the manual trigger for that step — a ratified, intentional
-addition to the §7 surface (the user has approved it as such; this is a code note,
-not a spec change).
+Publishing is the SOLVED→LOCKED transition (§3.3): only a `solved` week with
+feasible solver rows can publish. `POST /admin/publish` (§7) is the manual trigger
+for the step; §3.3 makes publish distinct from solve (an INFEASIBLE solve parks in
+`solved` with no solver rows and can never publish).
 """
 
 from __future__ import annotations
@@ -36,15 +35,17 @@ ERROR_ALREADY_LOCKED = "week_already_locked"
 
 
 def publish_week(db: DbSession, week: Week, actor: User | None) -> Week:
-    """§3.3: lock `week`, seed next week's `solver_state`, fan out, audit.
+    """§3.3: lock a `solved` week — seed next week's `solver_state`, fan out, audit.
 
-    Preconditions: the week is not already locked, and a feasible solve has left
-    solver assignments (a bare `solved_at` from an INFEASIBLE run is not enough).
-    Raises 409 otherwise. `actor` is the human who published, or None for the cron.
+    Preconditions (SOLVED→LOCKED): the week is `solved` and a feasible solve has
+    left solver assignments. An already-`locked` week raises 409 ALREADY_LOCKED; a
+    week that is not `solved`, or one parked in `solved` by an INFEASIBLE run (no
+    solver rows), raises 409 NOT_SOLVED. `actor` is the human who published, or
+    None for the cron.
     """
     if week.status is WeekStatus.LOCKED:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ERROR_ALREADY_LOCKED)
-    if week.solved_at is None or not _has_solver_rows(db, week):
+    if week.status is not WeekStatus.SOLVED or not _has_solver_rows(db, week):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ERROR_NOT_SOLVED)
 
     week.status = WeekStatus.LOCKED

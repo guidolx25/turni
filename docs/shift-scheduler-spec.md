@@ -1,6 +1,6 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.2 (2026-07-15) · **Status:** Approved for build
+**Version:** 1.3 (2026-07-19) · **Status:** Approved for build
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -60,9 +60,12 @@ Weight separation: `W1 >> {W2, W2_SPREAD} >> W3` (e.g., 10 000 / 100 / 200 / 1 �
 
 Timezone: **Europe/Rome** everywhere.
 
-1. **Open window:** constraints may be submitted for any future week (multi-week supported), each week's window closes **Sunday 17:00** before that week starts. Submission is an **upsert** on `(user, week, day, slot)`; within a day the `full_day` slot and the `am`/`pm` slots are mutually exclusive — writing `full_day` replaces any `am`/`pm` rows for that day, and writing `am`/`pm` replaces a `full_day` row for that day.
-2. **Solve:** scheduled job (APScheduler cron, Sun 17:00) runs the solver for the upcoming week. Admin/root also have a manual **"Generate now"** button (marks window closed early — confirmation required).
-3. **Publish + lock:** schedule becomes visible to all, slots lock, notification fan-out.
+1. **Open window** (`status=open`)**:** constraints may be submitted for any future week (multi-week supported), each week's window closes **Sunday 17:00** before that week starts. Submission is an **upsert** on `(user, week, day, slot)`; within a day the `full_day` slot and the `am`/`pm` slots are mutually exclusive — writing `full_day` replaces any `am`/`pm` rows for that day, and writing `am`/`pm` replaces a `full_day` row for that day.
+2. **Solve** (→ `status=solved`)**:** the scheduled job (APScheduler cron, Sun 17:00) runs the solver for the upcoming week; admin/root also have a manual **"Generate now"** button (marks the window closed early — confirmation required). Running the solver moves the week to `solved` — the window is closed and a schedule may be computed, but it is **not yet visible and no notifications fire**. Schedule visibility and fan-out key off `locked`, never `solved`.
+3. **Publish + lock** (→ `status=locked`)**:** publishing makes the schedule **visible to all**, locks the slots, and fans out notifications (§10). Two paths reach it:
+   - **Cron — atomic:** a feasible scheduled solve publishes immediately (solve+publish in one Sunday-17:00 automation), *unless* a sacrifice is pending — see below.
+   - **Manual — solve → review → publish:** an admin "Generate now" leaves the week in `solved` for review; publishing is a separate, explicit step (`POST /admin/publish`, §7).
+   - **Sacrifice pending:** when a solve is INFEASIBLE the §2.3 sacrifice flow opens and the week **parks in `solved`** — never published with an unresolved conflict — and **auto-publishes once the sacrifice is resolved** (accepted and the re-solve is feasible). A declined/escalated proposal leaves the week in `solved` for the admin to resolve (§2.3, §5 override).
 4. **Post-lock:** changes only via swap requests (§4) or admin override (§5).
 
 ---
@@ -109,7 +112,14 @@ sessions(id, user_id, created_at, expires_at)
       -- signed cookie. Logout deletes the row; expired rows are purged by the
       -- nightly job (§11).
 
-weeks(id, monday_date UNIQUE, status ENUM(open,locked), solved_at, locked_at)
+weeks(id, monday_date UNIQUE, status ENUM(open,solved,locked), solved_at, locked_at)
+      -- open   = submission window open, constraints editable (§3.1)
+      -- solved = window closed, solver has run; schedule computed but NOT yet
+      --          visible/published, OR a §2.3 sacrifice is pending. Reached by a
+      --          manual "Generate now" (awaits review) or by any solve that opens
+      --          the sacrifice flow. Visibility and fan-out never key off this
+      --          state — only `locked` (§3.2/§3.3).
+      -- locked = published: schedule visible to all, slots locked (§3.3)
 
 constraints(id, user_id, week_id, day ENUM(mon..sun), slot ENUM(am,pm,full_day),
             kind ENUM(hard,soft), note, created_at, updated_at,
@@ -172,8 +182,12 @@ GET    /notifications         POST /notifications/read
 POST   /sacrifice/{id}/accept POST /sacrifice/{id}/decline
 
 -- admin --
-POST   /admin/solve?week=     POST /admin/override        GET /admin/constraints?week=
-GET    /admin/audit
+POST   /admin/solve?week=     POST /admin/publish?week=   POST /admin/override
+GET    /admin/constraints?week=   GET /admin/audit
+       -- solve runs the solver (→ status=solved); publish locks a solved week
+       -- (→ status=locked) and fans out (§3.2/§3.3). They are distinct steps:
+       -- an INFEASIBLE solve can never publish, and the manual path reviews the
+       -- solved schedule before publishing.
 
 -- root --
 GET/POST/PATCH /root/users
@@ -223,7 +237,9 @@ notify(user, event_type, payload)  # fans out to every enabled channel
 - **Channel 2 — email:** Resend API, per-user opt-out, templated in the user's language.
 - **Channel 3 — PWA push:** *phase-2, not in v1*; the abstraction must allow adding it without touching call sites.
 
-**Events:** `schedule_published`, `swap_requested`, `swap_accepted`, `swap_rejected`, `sacrifice_proposed`, `sacrifice_resolved`, `window_closing_24h` (reminder cron Sat 17:00), `admin_override`.
+**Events:** `schedule_published`, `swap_requested`, `swap_accepted`, `swap_rejected`, `sacrifice_proposed`, `sacrifice_resolved`, `sacrifice_escalated`, `window_closing_24h` (reminder cron Sat 17:00), `admin_override`.
+
+- `sacrifice_escalated` (§2.3): fired when a proposal is declined, or when no free-day move restores coverage. Audience is the **visible admins only** — a role-based fan-out, so root is excluded (§5) via the same filtered helper every user listing uses, never an ad-hoc recipient query. The payload carries the conflict explanation **and the minimal unsat core** (the conflicting hard requests, from the assumption literals of §8) so the admin can act without re-solving. It fires with the week still `solved` (unpublished): escalation triggers **no worker-facing notification and no schedule visibility**.
 
 ---
 

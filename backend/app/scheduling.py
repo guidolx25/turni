@@ -61,13 +61,15 @@ def window_deadline(monday_date: dt.date) -> dt.datetime:
 
 
 def is_submittable(week: Week, now: dt.datetime | None = None) -> bool:
-    """§3.1: constraints are editable only while the week is open, no solve has
-    run, AND its Sunday 17:00 deadline has not passed. `now` defaults to now (UTC).
+    """§3.1: constraints are editable only while the week is `open` AND its Sunday
+    17:00 deadline has not passed. `now` defaults to now (UTC).
 
-    The `solved_at` guard is what "Generate now marks the window closed early"
-    (§3.2) means mechanically: once a solve runs, submissions stop immediately —
-    ahead of the deadline if an admin generated early — so the solved schedule
-    cannot be invalidated by a late edit.
+    The status is the primary gate: a `solved` or `locked` week refuses edits. That
+    is what "Generate now marks the window closed early" (§3.2) means mechanically —
+    once a solve runs, `run_solve` moves the week OPEN→SOLVED, so submissions stop
+    immediately (ahead of the deadline if an admin generated early) and the solved
+    schedule cannot be invalidated by a late edit. `solved_at is None` is kept as a
+    belt-and-suspenders cross-check but is subsumed by the status transition.
     """
     moment = now or utcnow()
     return (
@@ -97,16 +99,17 @@ def resolve_submittable_week(db: DbSession, monday_date: dt.date) -> Week:
     """The week `monday_date` names, ready to accept a constraint edit (§3.1).
 
     Raises 422 if `monday_date` is not a Monday, 409 if the window is closed —
-    because the deadline has passed, the week is already locked, or a solve has
-    already run (§3.2 "Generate now marks the window closed early"). A past week
-    is refused *before* a row is created, so a closed submission never
-    materialises a stray week.
+    because the deadline has passed, or the week is no longer `open` (`solved` or
+    `locked`, §3.2 "Generate now marks the window closed early"). A past week is
+    refused *before* a row is created, so a closed submission never materialises a
+    stray week.
 
-    The `solved_at` guard makes this shared chokepoint agree with `is_submittable`
-    (used by the DELETE path): once a solve runs — even an early admin "Generate
-    now" that leaves the week `status=OPEN` — POST and DELETE both refuse the
-    edit, so a solved schedule (and any pending sacrifice proposal probed against
-    its constraint set) cannot be invalidated by a late mutation.
+    The `status is OPEN` gate makes this shared chokepoint agree with
+    `is_submittable` (used by the DELETE path): once a solve runs, `run_solve`
+    moves the week OPEN→SOLVED, so POST and DELETE both refuse the edit — a solved
+    schedule (and any pending sacrifice proposal probed against its constraint set)
+    cannot be invalidated by a late mutation. `solved_at is None` is kept as a
+    belt-and-suspenders cross-check.
     """
     try:
         ensure_monday(monday_date)

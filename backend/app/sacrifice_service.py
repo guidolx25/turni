@@ -51,6 +51,11 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
     None when nothing was resolvable by a free-day move (escalated instead)."""
     roster = build_roster(db)
     by_id = {w.id: w for w in roster}
+    # §10: the enumerated unsat core (the conflicting hard requests, from the §8
+    # assumption literals) rendered readable. Computed once and carried on every
+    # path — the proposal's conflict_note (so decline/accept-infeasible forward it)
+    # and the immediate escalation below — so the admin always has the minimal core.
+    conflict_note = _blocking_note(by_id, result.blocking_constraints)
     candidates = sorted(
         {
             (c.worker_id, c.day)
@@ -62,17 +67,12 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
     for worker_id, day in candidates:
         probe = solve(build_solver_input(db, week, roster, free_day_pins={worker_id: day}))
         if probe.status is not SolverStatus.INFEASIBLE:
-            return _create_proposal(db, week, worker_id, day)
+            return _create_proposal(db, week, worker_id, day, conflict_note)
 
     # §2.3: no free-day move restores coverage — escalate to the admin WITH the
-    # conflict explanation. The blocking constraints are in hand here, so we build
-    # the note now rather than discarding them.
-    _escalate(
-        db,
-        week,
-        outcome="escalated",
-        conflict_note=_blocking_note(by_id, result.blocking_constraints),
-    )
+    # enumerated-core explanation. The blocking constraints are in hand here, so we
+    # carry the core rather than discarding it.
+    _escalate(db, week, outcome="escalated", conflict_note=conflict_note)
     db.commit()
     return None
 
@@ -135,16 +135,21 @@ def decline_sacrifice(db: DbSession, proposal: SacrificeProposal, actor: User) -
     return proposal
 
 
-def _create_proposal(db: DbSession, week: Week, worker_id: int, day: Day) -> SacrificeProposal:
+def _create_proposal(
+    db: DbSession, week: Week, worker_id: int, day: Day, conflict_note: str
+) -> SacrificeProposal:
+    # §10: store the enumerated unsat core (the conflicting hard requests) as the
+    # proposal's conflict_note, not an "offering {day}" blurb. decline_sacrifice
+    # and the accept-infeasible path forward proposal.conflict_note to the admin,
+    # so the minimal core reaches the escalation on every path. It also surfaces to
+    # the worker (SacrificeProposalOut.conflict_note) — a kept improvement, telling
+    # them *why* they were asked. The offered day already rides its own field.
     proposal = SacrificeProposal(
         week_id=week.id,
         user_id=worker_id,
         proposed_free_day=day,
         status=SacrificeStatus.PENDING,
-        conflict_note=(
-            f"No feasible schedule honors the current hard requests; "
-            f"offering {day.value} as a full free day."
-        ),
+        conflict_note=conflict_note,
     )
     db.add(proposal)
     db.flush()  # assign an id for the notification payload
@@ -184,10 +189,20 @@ def _blocking_note(by_id: dict[int, WorkerRef], blocking: tuple[PersonalConstrai
 
 
 def _escalate(db: DbSession, week: Week, outcome: str, conflict_note: str | None) -> None:
-    """§2.3: hand an UNRESOLVED conflict to the admin WITH its explanation.
+    """§2.3/§10: hand an UNRESOLVED conflict to the admin WITH its explanation.
 
-    Role-based fan-out → root is excluded (§5); a distinct escalation event keeps
-    this hand-off from being conflated with a `sacrifice_resolved` resolution.
+    Uniform `{week, outcome, conflict_note}` payload across all three call sites
+    (open_sacrifice-immediate, accept-infeasible, decline). The §10 minimal unsat
+    core is delivered as the enumerated conflicting hard requests within
+    `conflict_note` (the §8 assumption-literal core rendered readable) — no §6
+    column is added; §6 sacrifice_proposals is unchanged, only §10 was amended.
+
+    Role-based fan-out → ONLY `admin_recipients(db)` receive it, and root is
+    excluded there via `visible_users_stmt` (§5); NO worker-facing notification
+    fires. Escalation does NOT change `week.status`: the week stays `solved`
+    (unpublished, worker-invisible) for the admin to resolve (§3.3). A distinct
+    escalation event keeps this hand-off from being conflated with a
+    `sacrifice_resolved` resolution.
     """
     payload = {
         "week": week.monday_date.isoformat(),

@@ -52,13 +52,14 @@ def admin_solve(week: dt.date, admin: CurrentAdmin, db: DbDep) -> SolveResultOut
 
 @router.post("/publish", response_model=WeekOut)
 def admin_publish(week: dt.date, admin: CurrentAdmin, db: DbDep) -> WeekOut:
-    """§3.3: publish a solved week — lock it, seed next week's solver_state, fan
-    out the schedule_published notifications, audit.
+    """§3.3: publish a `solved` week — lock it (SOLVED→LOCKED), seed next week's
+    solver_state, fan out the schedule_published notifications, audit.
 
-    Distinct from solve (§3.2): a week must already be feasibly solved. This is a
-    ratified, intentional addition to the §7 surface — §3.3 makes publish a required
-    step an INFEASIBLE solve cannot reach — see `app.publish_service`. 409 if
-    unsolved or already locked.
+    Distinct from solve (§3.2): a week must already be feasibly `solved`.
+    `POST /admin/publish` is listed on the §7 API surface (spec v1.3) — §3.3 makes
+    publish a required step an INFEASIBLE solve cannot reach — see
+    `app.publish_service`. 409 if not solved (or parked in `solved` with no feasible
+    rows) or already locked; 404 if the week does not exist.
     """
     week_row = db.scalar(select(Week).where(Week.monday_date == week))
     if week_row is None:
