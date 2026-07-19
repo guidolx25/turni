@@ -140,9 +140,7 @@ def test_decline_escalates_to_admin_without_publishing(
     matteo_notes = session.scalars(
         select(Notification).where(Notification.user_id == roster["matteo"].id)
     ).all()
-    assert not any(
-        n.event_type == EVENT_SACRIFICE_ESCALATED for n in matteo_notes
-    )  # root excluded
+    assert not any(n.event_type == EVENT_SACRIFICE_ESCALATED for n in matteo_notes)  # root excluded
 
 
 # --- escalation when no free-day move helps ---------------------------------

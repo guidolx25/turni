@@ -136,6 +136,4 @@ def full_weekend_worker_ids(
     covered: dict[int, set[tuple[Day, AssignmentSlot]]] = defaultdict(set)
     for r in emit_weekend_template(roster, week_monday):
         covered[r.worker_id].add((r.day, r.slot))
-    return frozenset(
-        wid for wid, slots in covered.items() if slots >= _ALL_WEEKEND_FULL_DAY
-    )
+    return frozenset(wid for wid, slots in covered.items() if slots >= _ALL_WEEKEND_FULL_DAY)
