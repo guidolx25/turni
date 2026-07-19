@@ -21,6 +21,8 @@ from app.models import AuditLog, Constraint, Notification, SacrificeProposal, We
 from app.notifications import (
     EVENT_SACRIFICE_ESCALATED,
     EVENT_SACRIFICE_PROPOSED,
+    EVENT_SACRIFICE_RESOLVED,
+    EVENT_SCHEDULE_PUBLISHED,
 )
 from app.scheduling import get_or_create_week
 from tests.factories import PASSWORD, create_full_roster
@@ -120,7 +122,7 @@ def test_decline_escalates_to_admin_without_publishing(
     assert resp.json()["status"] == "declined"
 
     week = session.scalar(select(Week).where(Week.monday_date == monday))
-    assert week is not None and week.status is WeekStatus.OPEN  # not published
+    assert week is not None and week.status is WeekStatus.SOLVED  # parked, not published
 
     # Mattia (visible admin) is notified of the escalation WITH the conflict
     # explanation (§2.3); root is not.
@@ -176,6 +178,79 @@ def test_unresolvable_conflict_escalates_without_a_proposal(
     # discarded — the note names the conflicting Monday requests.
     note = escalations[0].payload.get("conflict_note")
     assert note and "mon" in note.lower()
+
+
+# --- escalation carries the minimal unsat core (§2.3, §10, both paths) -------
+
+
+def _assert_minimal_core_escalation(
+    session: DbSession, roster: dict, week: Week, expect_in_note: tuple[str, ...]
+) -> None:
+    """§10: exactly one `sacrifice_escalated`, to the visible admin(s) ONLY (root
+    excluded); its payload carries the non-empty enumerated core naming the
+    conflicting hard requests; the week stays `solved`/unpublished; and the
+    escalation produced NO worker-facing notification."""
+    escalations = session.scalars(
+        select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
+    ).all()
+    assert len(escalations) == 1  # exactly one escalation
+    assert escalations[0].user_id == roster["mattia"].id  # the visible admin
+    assert all(n.user_id != roster["matteo"].id for n in escalations)  # root gets none
+
+    note = escalations[0].payload.get("conflict_note")
+    assert note, "the escalation must forward the enumerated unsat core"
+    lowered = note.lower()
+    assert all(token in lowered for token in expect_in_note)
+
+    session.refresh(week)
+    assert week.status is WeekStatus.SOLVED  # parked, unpublished
+
+    # The escalation is a hand-off, not a resolution: no worker-facing event fires.
+    assert (
+        session.scalars(
+            select(Notification).where(Notification.event_type == EVENT_SCHEDULE_PUBLISHED)
+        ).all()
+        == []
+    )
+    assert (
+        session.scalars(
+            select(Notification).where(Notification.event_type == EVENT_SACRIFICE_RESOLVED)
+        ).all()
+        == []
+    )
+
+
+def test_decline_escalation_carries_minimal_core(client: TestClient, session: DbSession) -> None:
+    """§2.3/§10 decline path: declining forwards the minimal core to the admin only."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    _hard(session, roster["pasha"].id, week, Day.FRI)
+    login(client, "mattia")
+    _solve(client, monday)
+    proposal = session.scalars(select(SacrificeProposal)).one()
+
+    login(client, "pasha")
+    assert client.post(f"/sacrifice/{proposal.id}/decline").status_code == 200
+
+    session.refresh(week)
+    _assert_minimal_core_escalation(session, roster, week, expect_in_note=("pasha", "fri"))
+
+
+def test_no_move_escalation_carries_minimal_core(client: TestClient, session: DbSession) -> None:
+    """§2.3/§10 no-resolvable-move path: the immediate escalation forwards the
+    minimal core (conflicting Monday requests) to the admin only."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    for name in ("matteo", "francesco", "mattia"):
+        _hard(session, roster[name].id, week, Day.MON)
+
+    login(client, "mattia")
+    assert _solve(client, monday).json()["status"] == "infeasible"
+
+    session.refresh(week)
+    _assert_minimal_core_escalation(session, roster, week, expect_in_note=("mon",))
 
 
 # --- authorization + state --------------------------------------------------

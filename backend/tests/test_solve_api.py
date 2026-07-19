@@ -17,8 +17,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
-from app.enums import AssignmentSource, ConstraintKind, ConstraintSlot, Day
-from app.models import Assignment, AuditLog, Constraint, Week
+from app.enums import AssignmentSource, ConstraintKind, ConstraintSlot, Day, WeekStatus
+from app.models import Assignment, AuditLog, Constraint, Notification, Week
 from app.scheduling import get_or_create_week, is_submittable
 from app.solve_service import run_solve
 from tests.factories import PASSWORD, create_full_roster
@@ -155,7 +155,7 @@ def test_early_solve_closes_window_for_post_and_delete_over_http(
     client: TestClient, session: DbSession
 ) -> None:
     """§3.2 "Generate now marks the window closed early": an early manual solve
-    leaves the week `status=OPEN` with `solved_at` set. POST /constraints and
+    moves the week OPEN→`status=SOLVED` with `solved_at` set. POST /constraints and
     DELETE must AGREE — both 409 — so a solved schedule cannot be mutated by a
     late edit (the hazard: a pending sacrifice was probed against this very set).
     """
@@ -171,11 +171,11 @@ def test_early_solve_closes_window_for_post_and_delete_over_http(
     assert created.status_code == 201, created.text
     constraint_id = created.json()["id"]
 
-    # Admin "Generate now" ahead of the natural deadline: stamps solved_at, OPEN.
+    # Admin "Generate now" ahead of the natural deadline: stamps solved_at, SOLVED.
     login(client, "mattia")
     assert client.post("/admin/solve", params={"week": monday.isoformat()}).status_code == 200
     week = session.scalar(select(Week).where(Week.monday_date == monday))
-    assert week is not None and week.status.value == "open" and week.solved_at is not None
+    assert week is not None and week.status is WeekStatus.SOLVED and week.solved_at is not None
 
     # POST and DELETE now agree: both refuse the closed window.
     login(client, "pasha")
@@ -204,3 +204,40 @@ def test_admin_solve_writes_an_audit_row(client: TestClient, session: DbSession)
     ).all()
     assert rows, "the solve must write an audit_log row"
     assert rows[0].actor_id is not None  # the admin who triggered it
+
+
+def test_manual_feasible_solve_parks_in_solved_invisible_no_fanout(
+    client: TestClient, session: DbSession
+) -> None:
+    """§3.2/§3.3: a feasible manual "Generate now" leaves the week in `solved` —
+    NOT `locked`. Visibility and fan-out key off `locked`, never `solved`: a plain
+    worker still sees an empty schedule, an admin previews the solved grid, and no
+    `schedule_published` notification has fired yet (that awaits an explicit publish).
+    """
+    create_full_roster(session)
+    monday = _future_monday()
+
+    login(client, "mattia")
+    resp = client.post("/admin/solve", params={"week": monday.isoformat()})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] in ("optimal", "feasible")
+
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status is WeekStatus.SOLVED
+
+    # The worker sees nothing yet — the draft is not leaked before publish.
+    login(client, "pasha")
+    worker_grid = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    assert worker_grid["status"] == "solved"
+    assert worker_grid["assignments"] == []
+
+    # The admin may preview the solved grid.
+    login(client, "mattia")
+    admin_grid = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    assert admin_grid["assignments"], "admin previews the solved schedule"
+
+    # No publish fan-out: `solved` never triggers §10 notifications.
+    published = session.scalars(
+        select(Notification).where(Notification.event_type == "schedule_published")
+    ).all()
+    assert published == []

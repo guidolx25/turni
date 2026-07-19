@@ -14,9 +14,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
-from app.enums import ConstraintKind, ConstraintSlot, Day, WeekStatus
+from app.enums import ConstraintKind, ConstraintSlot, Day, SacrificeStatus, WeekStatus
 from app.jobs import run_weekly_solve, upcoming_monday
-from app.models import Constraint, Notification, Week
+from app.models import Constraint, Notification, SacrificeProposal, Week
+from app.sacrifice_service import accept_sacrifice
 from app.scheduler import WINDOW_CLOSE_TRIGGER, build_scheduler
 from app.scheduling import get_or_create_week
 from tests.factories import create_full_roster
@@ -82,13 +83,108 @@ def test_weekly_solve_infeasible_does_not_publish(session: DbSession) -> None:
     result = run_weekly_solve(session, _FIRE_SUNDAY)
     assert result is not None and result.status.value == "infeasible"
     session.refresh(week)
-    assert week.status is WeekStatus.OPEN  # not published
+    assert week.status is WeekStatus.SOLVED  # parked, not published (§3.3)
     # No schedule_published fan-out; the §2.3 flow may still notify (proposal or
     # escalation), but nobody is told a schedule went live.
     published = session.scalars(
         select(Notification).where(Notification.event_type == "schedule_published")
     ).all()
     assert published == []
+
+
+def test_weekly_solve_feasible_locks_atomically_with_fanout(session: DbSession) -> None:
+    """§3.3 cron-atomic path: a feasible scheduled solve on an OPEN week goes
+    straight to LOCKED (solve+publish in one automation) and fans out
+    `schedule_published` to every active user (incl. root, per project convention)."""
+    roster = create_full_roster(session)
+    result = run_weekly_solve(session, _FIRE_SUNDAY)
+    assert result is not None and result.status.value in ("optimal", "feasible")
+
+    week = session.scalar(select(Week).where(Week.monday_date == _TARGET_MONDAY))
+    assert week is not None and week.status is WeekStatus.LOCKED
+
+    published = session.scalars(
+        select(Notification).where(Notification.event_type == "schedule_published")
+    ).all()
+    assert {n.user_id for n in published} == {u.id for u in roster.values()}
+
+
+def test_weekly_solve_parks_then_auto_publishes_on_accept(session: DbSession) -> None:
+    """§3.3 sacrifice-pending path: an INFEASIBLE cron solve parks the week in
+    `solved` with a pending proposal — no publish, no worker fan-out — and then
+    accepting the sacrifice re-solves feasibly and AUTO-publishes → LOCKED, fanning
+    out `schedule_published` to every active user."""
+    roster = create_full_roster(session)
+    week = get_or_create_week(session, _TARGET_MONDAY)
+    session.add(
+        Constraint(
+            user_id=roster["pasha"].id,
+            week_id=week.id,
+            day=Day.FRI,
+            slot=ConstraintSlot.FULL_DAY,
+            kind=ConstraintKind.HARD,
+        )
+    )
+    session.commit()
+
+    result = run_weekly_solve(session, _FIRE_SUNDAY)
+    assert result is not None and result.status.value == "infeasible"
+    session.refresh(week)
+    assert week.status is WeekStatus.SOLVED  # parked, awaiting the §2.3 resolution
+
+    proposals = session.scalars(select(SacrificeProposal)).all()
+    assert len(proposals) == 1 and proposals[0].status is SacrificeStatus.PENDING
+    assert (
+        session.scalars(
+            select(Notification).where(Notification.event_type == "schedule_published")
+        ).all()
+        == []
+    )  # nothing published while parked
+
+    accept_sacrifice(session, proposals[0], actor=roster["pasha"])
+    session.refresh(week)
+    assert week.status is WeekStatus.LOCKED  # auto-published on resolution
+
+    published = session.scalars(
+        select(Notification).where(Notification.event_type == "schedule_published")
+    ).all()
+    assert {n.user_id for n in published} == {u.id for u in roster.values()}
+
+
+def test_weekly_solve_refire_on_parked_solved_is_idempotent(session: DbSession) -> None:
+    """A cron re-fire over a `solved` week parked with a pending proposal does NOT
+    re-solve, does NOT open a duplicate proposal, and does NOT publish — it is
+    skipped (returns None), leaving the parked week untouched for the §2.3 flow."""
+    roster = create_full_roster(session)
+    week = get_or_create_week(session, _TARGET_MONDAY)
+    session.add(
+        Constraint(
+            user_id=roster["pasha"].id,
+            week_id=week.id,
+            day=Day.FRI,
+            slot=ConstraintSlot.FULL_DAY,
+            kind=ConstraintKind.HARD,
+        )
+    )
+    session.commit()
+
+    first = run_weekly_solve(session, _FIRE_SUNDAY)
+    assert first is not None and first.status.value == "infeasible"
+    session.refresh(week)
+    assert week.status is WeekStatus.SOLVED
+    assert len(session.scalars(select(SacrificeProposal)).all()) == 1
+
+    again = run_weekly_solve(session, _FIRE_SUNDAY)  # re-fire on the parked week
+    assert again is None  # skipped: not re-solved
+    session.refresh(week)
+    assert week.status is WeekStatus.SOLVED  # unchanged
+    assert len(session.scalars(select(SacrificeProposal)).all()) == 1  # no duplicate
+    assert (
+        session.scalars(
+            select(Notification).where(Notification.event_type == "schedule_published")
+        ).all()
+        == []
+    )
 
 
 def test_weekly_solve_skips_already_published_week(session: DbSession) -> None:

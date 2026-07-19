@@ -32,7 +32,7 @@ DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 SPEC_ENUM_DOMAINS: dict[tuple[str, str], set[str]] = {
     ("users", "role"): {"bagnino", "spiaggino", "jolly"},
     ("users", "language"): {"it", "en"},
-    ("weeks", "status"): {"open", "locked"},
+    ("weeks", "status"): {"open", "solved", "locked"},
     ("constraints", "day"): DAYS,
     ("constraints", "slot"): {"am", "pm", "full_day"},
     ("constraints", "kind"): {"hard", "soft"},
@@ -161,7 +161,8 @@ def test_users_language_rejects_values_outside_the_domain(
 def test_weeks_status_rejects_values_outside_the_domain(
     connection: Connection, bad_value: str
 ) -> None:
-    """§6 weeks.status ENUM(open, locked): §3's lifecycle has exactly two states."""
+    """§6 weeks.status ENUM(open, solved, locked): §3's lifecycle has exactly three
+    states — and 'OPEN'/'closed'/'published' are none of them."""
     with pytest.raises(IntegrityError):
         make_week(connection, monday_date=f"2026-07-{20}", status=bad_value)
 

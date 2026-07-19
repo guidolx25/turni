@@ -51,17 +51,21 @@ def test_publish_requires_admin(client: TestClient, session: DbSession) -> None:
 
 
 def test_publish_locks_the_week(client: TestClient, session: DbSession) -> None:
+    """§3.3: publish is the SOLVED→LOCKED transition — a feasible solve first parks
+    the week in `solved`, then publish locks it."""
     create_full_roster(session)
     monday = _future_monday()
     _solve(session, monday)
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status is WeekStatus.SOLVED  # solve parked it here
     login(client, "mattia")
 
     resp = client.post("/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "locked"
 
-    week = session.scalar(select(Week).where(Week.monday_date == monday))
-    assert week is not None and week.status is WeekStatus.LOCKED and week.locked_at is not None
+    session.refresh(week)
+    assert week.status is WeekStatus.LOCKED and week.locked_at is not None
 
 
 def test_publish_writes_solver_state_from_template(client: TestClient, session: DbSession) -> None:
@@ -163,12 +167,21 @@ def test_infeasible_week_cannot_publish(client: TestClient, session: DbSession) 
             )
         )
     session.commit()
-    run_solve(session, week)  # infeasible
+    run_solve(session, week)  # infeasible → parks in `solved` with no solver rows
+    session.refresh(week)
+    assert week.status is WeekStatus.SOLVED  # parked, awaiting the §2.3 flow
 
     login(client, "mattia")
     resp = client.post("/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 409
     assert resp.json()["detail"] == "week_not_solved"
+
+    session.refresh(week)
+    assert week.status is WeekStatus.SOLVED  # still parked, never published
+    published = session.scalars(
+        select(Notification).where(Notification.event_type == EVENT_SCHEDULE_PUBLISHED)
+    ).all()
+    assert published == []
 
 
 def test_worker_sees_schedule_after_publish(client: TestClient, session: DbSession) -> None:
