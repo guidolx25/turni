@@ -17,6 +17,7 @@ from __future__ import annotations
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session as DbSession
 
+from app import audit
 from app.db import utcnow
 from app.enums import AssignmentSource, UserRole
 from app.models import Assignment, Constraint, SolverState, User, Week
@@ -28,6 +29,7 @@ from app.solver import (
     SolverStatus,
     WorkerRef,
     emit_weekend_template,
+    full_weekend_worker_ids,
     solve,
 )
 from app.solver.weights import DEFAULT_WEIGHTS
@@ -78,12 +80,18 @@ def build_solver_input(
         constraints=constraints,
         free_day_pins=free_day_pins or {},
         prior_state=_load_prior_state(db),
+        # §2.2 S2c: the rest-spread F-pair derived structurally from THIS week's H5
+        # template, so the term fires on a first-ever week too (empty prior_state).
+        full_weekend_ids=full_weekend_worker_ids(roster, week.monday_date),
         weights=DEFAULT_WEIGHTS,
     )
 
 
 def run_solve(
-    db: DbSession, week: Week, free_day_pins: dict[int, object] | None = None
+    db: DbSession,
+    week: Week,
+    free_day_pins: dict[int, object] | None = None,
+    actor: User | None = None,
 ) -> SolverResult:
     """Solve `week` and persist the outcome (§3.2, §8).
 
@@ -91,6 +99,11 @@ def run_solve(
     feasible result, replaces the generated assignment rows with the new schedule
     plus the fixed H5 weekend template. On INFEASIBLE, writes no assignments and
     leaves the blocking constraints on the result for the §2.3 sacrifice flow.
+
+    `actor` is the human who triggered the solve (admin/root), or None for the
+    §11 cron. Every solve is audited (§5 audit log): the transition is recorded in
+    the same transaction that stamps `solved_at`, so the log never lies about a
+    window that closed.
     """
     roster = build_roster(db)
     result = solve(build_solver_input(db, week, roster, free_day_pins))
@@ -98,6 +111,14 @@ def run_solve(
     if result.status is not SolverStatus.INFEASIBLE:
         _replace_generated_assignments(db, week, roster, result)
     week.solved_at = utcnow()
+    audit.record(
+        db,
+        actor,
+        audit.ACTION_SOLVE,
+        "week",
+        week.id,
+        {"monday": week.monday_date.isoformat(), "status": result.status.value},
+    )
     db.commit()
     return result
 

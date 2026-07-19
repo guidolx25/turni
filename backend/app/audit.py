@@ -18,6 +18,7 @@ from app.models import AuditLog, User
 ACTION_PUBLISH = "publish"
 ACTION_SOLVE = "solve"
 ACTION_OVERRIDE = "override"
+ACTION_SACRIFICE = "sacrifice"
 
 
 def record(

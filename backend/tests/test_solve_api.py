@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from app.enums import AssignmentSource, ConstraintKind, ConstraintSlot, Day
-from app.models import Assignment, Constraint, Week
+from app.models import Assignment, AuditLog, Constraint, Week
 from app.scheduling import get_or_create_week, is_submittable
 from app.solve_service import run_solve
 from tests.factories import PASSWORD, create_full_roster
@@ -149,3 +149,58 @@ def test_solve_closes_submission_window(client: TestClient, session: DbSession) 
 
     week = session.scalar(select(Week).where(Week.monday_date == monday))
     assert week is not None and is_submittable(week) is False
+
+
+def test_early_solve_closes_window_for_post_and_delete_over_http(
+    client: TestClient, session: DbSession
+) -> None:
+    """§3.2 "Generate now marks the window closed early": an early manual solve
+    leaves the week `status=OPEN` with `solved_at` set. POST /constraints and
+    DELETE must AGREE — both 409 — so a solved schedule cannot be mutated by a
+    late edit (the hazard: a pending sacrifice was probed against this very set).
+    """
+    create_full_roster(session)
+    monday = _future_monday()
+
+    # A worker submits while the window is genuinely open (well before Sun 17:00).
+    login(client, "pasha")
+    created = client.post(
+        "/constraints",
+        json={"week": monday.isoformat(), "day": "wed", "slot": "am", "kind": "soft"},
+    )
+    assert created.status_code == 201, created.text
+    constraint_id = created.json()["id"]
+
+    # Admin "Generate now" ahead of the natural deadline: stamps solved_at, OPEN.
+    login(client, "mattia")
+    assert client.post("/admin/solve", params={"week": monday.isoformat()}).status_code == 200
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status.value == "open" and week.solved_at is not None
+
+    # POST and DELETE now agree: both refuse the closed window.
+    login(client, "pasha")
+    post_after = client.post(
+        "/constraints",
+        json={"week": monday.isoformat(), "day": "thu", "slot": "pm", "kind": "soft"},
+    )
+    assert post_after.status_code == 409
+    assert post_after.json()["detail"] == "week_closed"
+
+    delete_after = client.delete(f"/constraints/{constraint_id}")
+    assert delete_after.status_code == 409
+    assert delete_after.json()["detail"] == "week_closed"
+
+
+def test_admin_solve_writes_an_audit_row(client: TestClient, session: DbSession) -> None:
+    """§5/§6: a solve is an audited transition; the actor is the triggering admin."""
+    create_full_roster(session)
+    monday = _future_monday()
+    login(client, "mattia")
+    assert client.post("/admin/solve", params={"week": monday.isoformat()}).status_code == 200
+
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    rows = session.scalars(
+        select(AuditLog).where(AuditLog.action == "solve", AuditLog.entity_id == week.id)
+    ).all()
+    assert rows, "the solve must write an audit_log row"
+    assert rows[0].actor_id is not None  # the admin who triggered it

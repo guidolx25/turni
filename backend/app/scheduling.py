@@ -97,9 +97,16 @@ def resolve_submittable_week(db: DbSession, monday_date: dt.date) -> Week:
     """The week `monday_date` names, ready to accept a constraint edit (§3.1).
 
     Raises 422 if `monday_date` is not a Monday, 409 if the window is closed —
-    either because the deadline has passed or the week is already locked. A past
-    week is refused *before* a row is created, so a closed submission never
+    because the deadline has passed, the week is already locked, or a solve has
+    already run (§3.2 "Generate now marks the window closed early"). A past week
+    is refused *before* a row is created, so a closed submission never
     materialises a stray week.
+
+    The `solved_at` guard makes this shared chokepoint agree with `is_submittable`
+    (used by the DELETE path): once a solve runs — even an early admin "Generate
+    now" that leaves the week `status=OPEN` — POST and DELETE both refuse the
+    edit, so a solved schedule (and any pending sacrifice proposal probed against
+    its constraint set) cannot be invalidated by a late mutation.
     """
     try:
         ensure_monday(monday_date)
@@ -113,6 +120,6 @@ def resolve_submittable_week(db: DbSession, monday_date: dt.date) -> Week:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ERROR_WEEK_CLOSED)
 
     week = get_or_create_week(db, monday_date)
-    if week.status is not WeekStatus.OPEN:
+    if week.status is not WeekStatus.OPEN or week.solved_at is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ERROR_WEEK_CLOSED)
     return week

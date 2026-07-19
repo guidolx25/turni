@@ -143,6 +143,12 @@ class SolverInput:
     # S2 cross-week seed: worker id → last-worked boundary. Absent = no prior
     # state (legal first-ever week). See PriorSlot for the FULL_DAY case.
     prior_state: Mapping[int, PriorSlot] = field(default_factory=dict)
+    # S2c rest-spread F-pair: the ids of the core workers who work THIS week's
+    # full-day weekend template (the two full-day spiaggini, §H5/§2.2). Derived
+    # structurally from the emitted template (`full_weekend_worker_ids`), never
+    # from identity. This is what makes the rest-spread term fire on week 1, when
+    # `prior_state` is empty — it does not depend on any carried-forward state.
+    full_weekend_ids: frozenset[int] = field(default_factory=frozenset)
     # W1/W2/W2_SPREAD/W3 (§2.2). Defaulted to zero so callers must set real
     # weights; the model step owns the well-separated constants.
     weights: Weights = Weights(0, 0, 0, 0)

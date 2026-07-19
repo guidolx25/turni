@@ -218,13 +218,21 @@ def solve(inp: SolverInput) -> SolverResult:
     fairness_deviation = sum(fairness_terms)
 
     # S2c: rest spread — full-weekend worker pairs sharing a free day (§2.2).
-    # F = core workers who work the full weekend template (prior state FULL_DAY),
-    # selected by weekend-template membership, never by identity. Each pair {u,v}
-    # that rests on the SAME day leaves their spiaggino role covered by the jolly
-    # alone for a whole day, so penalize it into the S2 band.
-    full_weekend_ids = [
-        w.id for w in roster if w.is_core and inp.prior_state.get(w.id) is PriorSlot.FULL_DAY
-    ]
+    # F = core workers who work THIS week's full-day weekend template (the two
+    # full-day spiaggini), taken from `inp.full_weekend_ids` — derived structurally
+    # from the emitted H5 template, never from identity. That structural signal is
+    # what makes this term fire on a first-ever week (empty `prior_state`). We also
+    # accept a FULL_DAY prior boundary as membership: only full-day spiaggini exit
+    # Sunday full-day, so the two signals name the SAME set in steady state; the
+    # union simply keeps the term correct when only one signal is supplied. Each
+    # pair {u,v} that rests on the SAME day leaves their spiaggino role covered by
+    # the jolly alone for a whole day, so penalize it into the S2 band.
+    full_weekend_ids = sorted(
+        w.id
+        for w in roster
+        if w.is_core
+        and (w.id in inp.full_weekend_ids or inp.prior_state.get(w.id) is PriorSlot.FULL_DAY)
+    )
     spread_terms: list[cp_model.IntVar] = []
     for i in range(len(full_weekend_ids)):
         for j in range(i + 1, len(full_weekend_ids)):
@@ -445,11 +453,17 @@ def _breakdown(assignments: tuple[SlotAssignment, ...], inp: SolverInput) -> Obj
         pm = sum(works(w.id, d, AssignmentSlot.PM) for d in SOLVER_DAYS)
         fairness_deviation += abs(am - pm)
 
-    # S2c: rest spread — full-weekend worker pairs (FULL_DAY prior) whose single
-    # H3 free day (the Mon–Thu day they worked zero slots) coincides.
-    full_weekend_ids = [
-        w.id for w in inp.roster if w.is_core and inp.prior_state.get(w.id) is PriorSlot.FULL_DAY
-    ]
+    # S2c: rest spread — full-weekend worker pairs whose single H3 free day (the
+    # Mon–Thu day they worked zero slots) coincides. Membership mirrors the model
+    # term: this-week structural template membership (`inp.full_weekend_ids`) unioned
+    # with a FULL_DAY prior boundary, so the reported breakdown matches what CP-SAT
+    # minimized on week 1 too, not only after prior_state is seeded.
+    full_weekend_ids = sorted(
+        w.id
+        for w in inp.roster
+        if w.is_core
+        and (w.id in inp.full_weekend_ids or inp.prior_state.get(w.id) is PriorSlot.FULL_DAY)
+    )
 
     def free_day(uid: int) -> object | None:
         worked_days = {d for d in FREE_DAYS if any(works(uid, d, s) for s in _SLOTS)}

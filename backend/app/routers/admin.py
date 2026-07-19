@@ -42,7 +42,7 @@ def admin_solve(week: dt.date, admin: CurrentAdmin, db: DbDep) -> SolveResultOut
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=ERROR_NOT_MONDAY
         ) from exc
-    result = run_solve(db, week_row)
+    result = run_solve(db, week_row, actor=admin)
     if result.status is SolverStatus.INFEASIBLE:
         # §2.3: open the sacrifice flow so an infeasible manual solve is never a
         # dead end — it proposes a free-day move or escalates to the admin.
@@ -55,9 +55,10 @@ def admin_publish(week: dt.date, admin: CurrentAdmin, db: DbDep) -> WeekOut:
     """§3.3: publish a solved week — lock it, seed next week's solver_state, fan
     out the schedule_published notifications, audit.
 
-    Distinct from solve (§3.2): a week must already be feasibly solved. §7 lists no
-    publish endpoint, but §3.3 makes publish a required step an INFEASIBLE solve
-    cannot reach — see `app.publish_service`. 409 if unsolved or already locked.
+    Distinct from solve (§3.2): a week must already be feasibly solved. This is a
+    ratified, intentional addition to the §7 surface — §3.3 makes publish a required
+    step an INFEASIBLE solve cannot reach — see `app.publish_service`. 409 if
+    unsolved or already locked.
     """
     week_row = db.scalar(select(Week).where(Week.monday_date == week))
     if week_row is None:

@@ -24,7 +24,11 @@ from app.solver.types import (
     WorkerRef,
     solve,
 )
-from app.solver.weekend import WeekendAssignment, emit_weekend_template
+from app.solver.weekend import (
+    WeekendAssignment,
+    emit_weekend_template,
+    full_weekend_worker_ids,
+)
 
 __all__ = [
     "ObjectiveBreakdown",
@@ -41,5 +45,6 @@ __all__ = [
     "as_prior_state",
     "compute_next_solver_state",
     "emit_weekend_template",
+    "full_weekend_worker_ids",
     "solve",
 ]

@@ -25,6 +25,12 @@ from app.models import Notification, User
 EVENT_SCHEDULE_PUBLISHED = "schedule_published"
 EVENT_SACRIFICE_PROPOSED = "sacrifice_proposed"
 EVENT_SACRIFICE_RESOLVED = "sacrifice_resolved"
+# §2.3 escalation to the admin is a distinct hand-off from a resolution: it carries
+# the conflict explanation for an UNRESOLVED week, so it must not be conflated with
+# `sacrifice_resolved`. §10's event list names no escalation event, so this one is
+# added following the existing `sacrifice_*` naming pattern (free-text column, no
+# migration needed) — noted for the §10 reconciliation.
+EVENT_SACRIFICE_ESCALATED = "sacrifice_escalated"
 EVENT_ADMIN_OVERRIDE = "admin_override"
 
 

@@ -15,9 +15,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
+from app.audit import ACTION_SACRIFICE
 from app.enums import ConstraintKind, ConstraintSlot, Day, SacrificeStatus, WeekStatus
-from app.models import Constraint, Notification, SacrificeProposal, Week
-from app.notifications import EVENT_SACRIFICE_PROPOSED, EVENT_SACRIFICE_RESOLVED
+from app.models import AuditLog, Constraint, Notification, SacrificeProposal, Week
+from app.notifications import (
+    EVENT_SACRIFICE_ESCALATED,
+    EVENT_SACRIFICE_PROPOSED,
+)
 from app.scheduling import get_or_create_week
 from tests.factories import PASSWORD, create_full_roster
 
@@ -118,20 +122,27 @@ def test_decline_escalates_to_admin_without_publishing(
     week = session.scalar(select(Week).where(Week.monday_date == monday))
     assert week is not None and week.status is WeekStatus.OPEN  # not published
 
-    # Mattia (visible admin) is notified of the escalation; root is not.
+    # Mattia (visible admin) is notified of the escalation WITH the conflict
+    # explanation (§2.3); root is not.
     admin_notes = session.scalars(
         select(Notification).where(Notification.user_id == roster["mattia"].id)
     ).all()
-    assert any(
-        n.event_type == EVENT_SACRIFICE_RESOLVED
+    escalations = [
+        n
+        for n in admin_notes
+        if n.event_type == EVENT_SACRIFICE_ESCALATED
         and n.payload
         and n.payload.get("outcome") == "declined"
-        for n in admin_notes
-    )
+    ]
+    assert escalations, "admin must receive a declined-escalation notification"
+    # §2.3: the escalation carries the conflict explanation, not just an outcome.
+    assert escalations[0].payload.get("conflict_note")
     matteo_notes = session.scalars(
         select(Notification).where(Notification.user_id == roster["matteo"].id)
     ).all()
-    assert not any(n.event_type == EVENT_SACRIFICE_RESOLVED for n in matteo_notes)  # root excluded
+    assert not any(
+        n.event_type == EVENT_SACRIFICE_ESCALATED for n in matteo_notes
+    )  # root excluded
 
 
 # --- escalation when no free-day move helps ---------------------------------
@@ -155,12 +166,18 @@ def test_unresolvable_conflict_escalates_without_a_proposal(
     admin_notes = session.scalars(
         select(Notification).where(Notification.user_id == roster["mattia"].id)
     ).all()
-    assert any(
-        n.event_type == EVENT_SACRIFICE_RESOLVED
+    escalations = [
+        n
+        for n in admin_notes
+        if n.event_type == EVENT_SACRIFICE_ESCALATED
         and n.payload
         and n.payload.get("outcome") == "escalated"
-        for n in admin_notes
-    )
+    ]
+    assert escalations, "admin must receive a no-resolvable-move escalation"
+    # §2.3: the blocking constraints are forwarded as a conflict explanation, not
+    # discarded — the note names the conflicting Monday requests.
+    note = escalations[0].payload.get("conflict_note")
+    assert note and "mon" in note.lower()
 
 
 # --- authorization + state --------------------------------------------------
@@ -205,3 +222,38 @@ def test_unknown_proposal_is_404(client: TestClient, session: DbSession) -> None
     create_full_roster(session)
     login(client, "pasha")
     assert client.post("/sacrifice/9999/accept").status_code == 404
+
+
+# --- audit trail (make audit.py truthful) -----------------------------------
+
+
+def test_sacrifice_accept_and_solve_write_audit_rows(
+    client: TestClient, session: DbSession
+) -> None:
+    """A solve and a sacrifice accept each leave an audit_log row (§5, §6). The
+    audit docstring claims every sacrifice + solve transition is recorded."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    _hard(session, roster["pasha"].id, week, Day.FRI)
+
+    login(client, "mattia")
+    _solve(client, monday)  # writes a solve row + a sacrifice propose row
+
+    solve_rows = session.scalars(select(AuditLog).where(AuditLog.action == "solve")).all()
+    assert solve_rows, "the solve must be audited"
+
+    proposal = session.scalars(select(SacrificeProposal)).one()
+    login(client, "pasha")
+    resp = client.post(f"/sacrifice/{proposal.id}/accept")
+    assert resp.status_code == 200, resp.text
+
+    accept_rows = session.scalars(
+        select(AuditLog).where(
+            AuditLog.action == ACTION_SACRIFICE,
+            AuditLog.entity_id == proposal.id,
+        )
+    ).all()
+    transitions = {r.payload.get("transition") for r in accept_rows if r.payload}
+    assert "propose" in transitions  # proposal opened during the solve
+    assert "accept" in transitions  # and the acceptance recorded

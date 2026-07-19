@@ -11,8 +11,9 @@ both call `publish_week`, so the lifecycle has exactly one publish path.
 
 Note on §7: the API surface lists no publish endpoint, but §3.3 makes publish a
 required lifecycle step distinct from solve (an INFEASIBLE solve cannot publish).
-`POST /admin/publish` is therefore added as the manual trigger, flagged for the
-gate review.
+`POST /admin/publish` is the manual trigger for that step — a ratified, intentional
+addition to the §7 surface (the user has approved it as such; this is a code note,
+not a spec change).
 """
 
 from __future__ import annotations
