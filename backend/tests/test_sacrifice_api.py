@@ -24,6 +24,7 @@ from app.notifications import (
     EVENT_SACRIFICE_RESOLVED,
     EVENT_SCHEDULE_PUBLISHED,
 )
+from app.routers.admin import ERROR_SACRIFICE_PENDING
 from app.scheduling import get_or_create_week
 from tests.factories import PASSWORD, create_full_roster
 
@@ -330,3 +331,109 @@ def test_sacrifice_accept_and_solve_write_audit_rows(
     transitions = {r.payload.get("transition") for r in accept_rows if r.payload}
     assert "propose" in transitions  # proposal opened during the solve
     assert "accept" in transitions  # and the acceptance recorded
+
+
+# --- re-solve guards while a §2.3 conversation is open -----------------------
+
+
+def test_pending_proposal_blocks_resolve_no_duplicate(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.3: while a PENDING proposal is open, a second /admin/solve is refused
+    with 409 `sacrifice_pending` — the frozen constraints would only re-open a
+    duplicate offer. No duplicate proposal and no duplicate sacrifice_proposed
+    notice are created, and the week stays SOLVED."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    _hard(session, roster["pasha"].id, week, Day.FRI)
+
+    login(client, "mattia")
+    assert _solve(client, monday).json()["status"] == "infeasible"
+
+    def counts() -> tuple[int, int]:
+        session.expire_all()
+        proposals = session.scalars(select(SacrificeProposal)).all()
+        notes = session.scalars(
+            select(Notification).where(Notification.event_type == EVENT_SACRIFICE_PROPOSED)
+        ).all()
+        return len(proposals), len(notes)
+
+    assert counts() == (1, 1)  # one proposal, one worker notice from the first solve
+
+    resp = _solve(client, monday)
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == ERROR_SACRIFICE_PENDING
+
+    assert counts() == (1, 1)  # blocked before run_solve: nothing duplicated
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status is WeekStatus.SOLVED
+
+
+def test_decline_then_resolve_does_not_re_offer_declined_worker(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.3: a worker who declined is never re-offered by a later re-solve of the
+    same (frozen) conflict. Pasha declines → DECLINED, week SOLVED, escalated. A
+    fresh /admin/solve is allowed (SOLVED, no pending) and re-runs INFEASIBLE, but
+    with Pasha excluded from the probe: zero new PENDING proposals to him and no
+    new sacrifice_proposed notice to him. The outcome is a proposal to a DIFFERENT
+    worker or an escalation — for the Friday-off conflict only Pasha's move helps,
+    so it escalates again.
+    """
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    _hard(session, roster["pasha"].id, week, Day.FRI)
+
+    login(client, "mattia")
+    _solve(client, monday)
+    proposal = session.scalars(select(SacrificeProposal)).one()
+
+    login(client, "pasha")
+    assert client.post(f"/sacrifice/{proposal.id}/decline").status_code == 200
+
+    session.expire_all()
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status is WeekStatus.SOLVED  # parked → re-solve allowed
+
+    def pasha_proposed_notices() -> int:
+        return len(
+            session.scalars(
+                select(Notification).where(
+                    Notification.user_id == roster["pasha"].id,
+                    Notification.event_type == EVENT_SACRIFICE_PROPOSED,
+                )
+            ).all()
+        )
+
+    before = pasha_proposed_notices()
+
+    login(client, "mattia")
+    resp = _solve(client, monday)
+    assert resp.status_code == 200, resp.text  # SOLVED + no pending → guard lets it run
+
+    session.expire_all()
+    # Key invariant: no NEW pending proposal addressed to the declined worker...
+    pasha_pending = session.scalars(
+        select(SacrificeProposal).where(
+            SacrificeProposal.user_id == roster["pasha"].id,
+            SacrificeProposal.status == SacrificeStatus.PENDING,
+        )
+    ).all()
+    assert pasha_pending == []
+    # ...and no fresh sacrifice_proposed notice to him.
+    assert pasha_proposed_notices() == before
+
+    # The re-solve lands on one of the two allowed outcomes: a proposal to a
+    # DIFFERENT (not-yet-declined) core worker, or an escalation to the admin.
+    other_pending = session.scalars(
+        select(SacrificeProposal).where(
+            SacrificeProposal.status == SacrificeStatus.PENDING,
+            SacrificeProposal.user_id != roster["pasha"].id,
+        )
+    ).all()
+    escalations = session.scalars(
+        select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
+    ).all()
+    assert other_pending or escalations

@@ -22,6 +22,7 @@ excluded (§5); Matteo-as-worker still gets his own per-user notifications elsew
 from __future__ import annotations
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from app import audit
@@ -56,11 +57,26 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
     # path — the proposal's conflict_note (so decline/accept-infeasible forward it)
     # and the immediate escalation below — so the admin always has the minimal core.
     conflict_note = _blocking_note(by_id, result.blocking_constraints)
+    # §2.3: a decline escalates and must never loop back — a worker who already
+    # declined a proposal for THIS week is not re-offered, even for a different day
+    # (conservative per-worker exclusion). With them out of the probe set, a
+    # re-solve after a decline either proposes to a different not-yet-declined
+    # worker whose move helps, or falls through to _escalate below.
+    declined = set(
+        db.scalars(
+            select(SacrificeProposal.user_id).where(
+                SacrificeProposal.week_id == week.id,
+                SacrificeProposal.status == SacrificeStatus.DECLINED,
+            )
+        )
+    )
     candidates = sorted(
         {
             (c.worker_id, c.day)
             for c in result.blocking_constraints
-            if by_id.get(c.worker_id) is not None and by_id[c.worker_id].is_core
+            if by_id.get(c.worker_id) is not None
+            and by_id[c.worker_id].is_core
+            and c.worker_id not in declined
         },
         key=lambda pair: (pair[0], _DAY_INDEX[pair[1]]),
     )

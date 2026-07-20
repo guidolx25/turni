@@ -18,7 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from app.enums import AssignmentSource, ConstraintKind, ConstraintSlot, Day, WeekStatus
-from app.models import Assignment, AuditLog, Constraint, Notification, Week
+from app.models import Assignment, AuditLog, Constraint, Notification, SacrificeProposal, Week
+from app.publish_service import ERROR_ALREADY_LOCKED
 from app.scheduling import get_or_create_week, is_submittable
 from app.solve_service import run_solve
 from tests.factories import PASSWORD, create_full_roster
@@ -241,3 +242,72 @@ def test_manual_feasible_solve_parks_in_solved_invisible_no_fanout(
         select(Notification).where(Notification.event_type == "schedule_published")
     ).all()
     assert published == []
+
+
+# --- re-solve guards on the resolved week (§3.4 lock, §2.3 review phase) ------
+
+
+def _generated_snapshot(session: DbSession, week_id: int) -> set:
+    """The identifying tuple of every SOLVER/WEEKEND_TEMPLATE row for `week_id`.
+
+    `id` is included so a delete+rewrite (which mints fresh autoincrement ids)
+    is detectable, not just a change of holder — "byte-for-byte unchanged".
+    """
+    session.expire_all()
+    rows = session.scalars(
+        select(Assignment).where(
+            Assignment.week_id == week_id,
+            Assignment.source.in_((AssignmentSource.SOLVER, AssignmentSource.WEEKEND_TEMPLATE)),
+        )
+    ).all()
+    return {(a.id, a.day, a.slot, a.role, a.user_id, a.source) for a in rows}
+
+
+def test_locked_week_resolve_refused_preserves_published_rows(
+    client: TestClient, session: DbSession
+) -> None:
+    """§3.4: a published (LOCKED) week refuses a re-solve with 409
+    `week_already_locked`, and the published SOLVER + WEEKEND_TEMPLATE rows are
+    left byte-for-byte — not deleted and rewritten under new ids."""
+    create_full_roster(session)
+    monday = _future_monday()
+    login(client, "mattia")
+    assert client.post("/admin/solve", params={"week": monday.isoformat()}).status_code == 200
+    assert client.post("/admin/publish", params={"week": monday.isoformat()}).status_code == 200
+
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status is WeekStatus.LOCKED
+    before = _generated_snapshot(session, week.id)
+    assert before  # the feasible publish left generated rows to preserve
+
+    resp = client.post("/admin/solve", params={"week": monday.isoformat()})
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == ERROR_ALREADY_LOCKED
+
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status is WeekStatus.LOCKED  # still locked
+    assert _generated_snapshot(session, week.id) == before  # ids + tuples identical
+
+
+def test_feasible_solved_week_regenerate_still_allowed(
+    client: TestClient, session: DbSession
+) -> None:
+    """§3.2: a feasible manual solve parks the week in SOLVED with no pending
+    proposal; the review-phase regenerate must stay allowed — a second
+    /admin/solve returns 200 and the week stays SOLVED (the lock/pending guards
+    do not over-fire on the legitimate case)."""
+    create_full_roster(session)
+    monday = _future_monday()
+    login(client, "mattia")
+    assert client.post("/admin/solve", params={"week": monday.isoformat()}).status_code == 200
+
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status is WeekStatus.SOLVED
+    assert session.scalars(select(SacrificeProposal)).all() == []  # no open conflict
+
+    resp = client.post("/admin/solve", params={"week": monday.isoformat()})
+    assert resp.status_code == 200, resp.text
+
+    session.expire_all()
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status is WeekStatus.SOLVED
