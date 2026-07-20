@@ -8,7 +8,7 @@ every solve of a week carries the grants from its accepted proposals; §6 adds
 `UNIQUE(week_id, user_id)` on `sacrifice_proposals`.
 **v1.7:** §6 `users` gains `ics_token UNIQUE` — the §7 `/export/ics` bearer
 credential: per-user, random, regenerable (revocation is per-user, never a
-SECRET_KEY rotation).
+SECRET_KEY rotation); §11 gains the ICS slot hours as deploy-time config.
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -286,7 +286,8 @@ notify(user, event_type, payload)  # fans out to every enabled channel
 ## 11. Deployment & ops
 
 - Single container: FastAPI + APScheduler + built frontend. Host: Fly.io or Railway with a persistent volume for SQLite (+ nightly `sqlite3 .backup` to the volume, keep 14).
-- Config via env: `SECRET_KEY`, `RESEND_API_KEY`, `REQUIRE_ADMIN_APPROVAL`, `TZ=Europe/Rome`, weight constants.
+- Config via env: `SECRET_KEY`, `RESEND_API_KEY`, `REQUIRE_ADMIN_APPROVAL`, `TZ=Europe/Rome`, weight constants, and the ICS slot hours `ICS_AM_START` / `ICS_AM_END` / `ICS_PM_START` / `ICS_PM_END` (v1.7).
+  - **ICS slot hours (v1.7).** The domain model knows only `AM`/`PM` (§1); a calendar event needs concrete times. They are deploy-time config, as Europe/Rome wall clock, converted to UTC at the edge — defaults `09:00–14:00` and `14:00–19:00`. These defaults are a **placeholder for the establishment's real opening hours** and carry no other meaning: nothing in §2 or §8 reads them, and changing them moves only what a subscribed calendar displays.
 - Health endpoint `/healthz`; structured logs; solver runs logged with duration + objective values.
 
 ---
