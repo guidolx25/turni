@@ -4,16 +4,25 @@ When a solve is INFEASIBLE, the blocking hard constraints are already named (via
 assumption literals, §8). This module turns that into the §2.3 conversation:
 
 1. **Probe before proposing.** For each core worker named in the conflict, re-solve
-   once with their free-day domain extended to the conflicted day (`free_day_pins`
-   → `_free_domain`). If that is feasible, we *know* accepting will work — so we
-   propose it. No dead-end proposals where a worker consents and the re-solve fails
-   anyway (which would corrode trust in the offer).
+   once carrying a **sacrifice grant** for the conflicted day (extending that one
+   worker's H3 free-day domain to `Mon–Thu ∪ {day}`) together with a pin forcing
+   their free day onto it. If that is feasible, we *know* accepting will work — so
+   we propose it. No dead-end proposals where a worker consents and the re-solve
+   fails anyway (which would corrode trust in the offer).
+
+   The grant is load-bearing and must not be reduced to a bare pin (§2.3). A pin
+   alone only *adds* `free[u][d] = 1` to an otherwise unchanged model, so the
+   probe's feasible region would be a SUBSET of the plain solve's — an INFEASIBLE
+   week would stay INFEASIBLE under every pin and this branch could never fire.
+
+   What is traded is the worker's weekday free-day PLACEMENT, never their hard
+   request: H7 stays inviolable and an accepted proposal still honors the hard
+   unavailability in full (§2.3 "What is being traded").
 2. **Propose to that worker:** "Move your free day to {day}?" (in-app now; email
    later — same `notify()` fan-out). Explicit accept/decline; never auto-resolved.
-3. **Accept →** re-solve with the free day pinned (feasible by construction) and
-   publish. **Decline, or no worker's move helps →** escalate to the admin (§2.3),
-   which subsumes the pin-only case: it escalates through the probe failing, not
-   through skipping the flow.
+3. **Accept →** re-solve with the grant AND the pin (feasible by construction) and
+   publish. **Decline, or no worker's move helps →** escalate to the admin (§2.3):
+   it escalates through the probe failing, not through skipping the flow.
 
 Escalation notifies the *visible* admin only — a role-based fan-out, so root is
 excluded (§5); Matteo-as-worker still gets his own per-user notifications elsewhere.
@@ -36,7 +45,14 @@ from app.notifications import (
 )
 from app.publish_service import publish_week
 from app.solve_service import build_roster, build_solver_input, run_solve
-from app.solver import PersonalConstraint, SolverResult, SolverStatus, WorkerRef, solve
+from app.solver import (
+    SOLVER_DAYS,
+    PersonalConstraint,
+    SolverResult,
+    SolverStatus,
+    WorkerRef,
+    solve,
+)
 from app.visibility import admin_recipients
 
 # Calendar order for a deterministic probe sequence over candidate days.
@@ -70,18 +86,41 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
             )
         )
     )
+    # H3 + §2.3 sacrifice grant: a conflicted day is a candidate iff a grant could
+    # make it a legal free day — the GENERAL rule, `day ∈ SOLVER_DAYS` (Mon–Fri),
+    # since that is exactly what `free_day_domain` will extend to. The §2.3
+    # corollary then falls out rather than being special-cased:
+    #   - Mon–Thu are already in the default domain (the grant is a no-op) and are
+    #     self-placing, so a probe there only re-confirms the plain solve;
+    #   - Friday is the one day H4 forces worked that the grant can free — the only
+    #     day where extending the domain changes the outcome;
+    #   - Sat/Sun have no solver variables at all (H5 template), so they are not in
+    #     SOLVER_DAYS, yield no candidate, and fall through to the escalation below.
+    # No literal Friday check appears anywhere in this filter.
     candidates = sorted(
         {
             (c.worker_id, c.day)
             for c in result.blocking_constraints
             if by_id.get(c.worker_id) is not None
             and by_id[c.worker_id].is_core
+            and c.day in SOLVER_DAYS
             and c.worker_id not in declined
         },
         key=lambda pair: (pair[0], _DAY_INDEX[pair[1]]),
     )
     for worker_id, day in candidates:
-        probe = solve(build_solver_input(db, week, roster, free_day_pins={worker_id: day}))
+        # §2.3: probe with the GRANT (widening this one worker's H3 domain to the
+        # conflicted day) plus the pin that lands their free day on it — exactly
+        # what accept_sacrifice will re-solve, so a feasible probe is a promise.
+        probe = solve(
+            build_solver_input(
+                db,
+                week,
+                roster,
+                free_day_pins={worker_id: day},
+                sacrifice_grants={worker_id: day},
+            )
+        )
         if probe.status is not SolverStatus.INFEASIBLE:
             return _create_proposal(db, week, worker_id, day, conflict_note)
 
@@ -94,7 +133,15 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
 
 
 def accept_sacrifice(db: DbSession, proposal: SacrificeProposal, actor: User) -> SacrificeProposal:
-    """§2.3 step 3 (accept): re-solve with the free day pinned, then publish.
+    """§2.3 step 3 (accept): re-solve with the free day granted AND pinned, then publish.
+
+    The pin forces the free day onto the offered day; the grant (H3) is what makes
+    that day part of the worker's domain in the first place, so the two must travel
+    together — a pin without its grant would be silently dropped by the model and
+    the re-solve would not reproduce the probe.
+
+    The worker's hard request is untouched: it is still enforced as an H7 assumption
+    on this re-solve (§2.3 — the trade is the free-day placement, never the request).
 
     Feasible by construction (the proposal was probed), but the INFEASIBLE branch
     is kept honest: it never publishes an unsolvable week — it escalates instead."""
@@ -102,7 +149,11 @@ def accept_sacrifice(db: DbSession, proposal: SacrificeProposal, actor: User) ->
     proposal.status = SacrificeStatus.ACCEPTED
     week = proposal.week
     result = run_solve(
-        db, week, free_day_pins={proposal.user_id: proposal.proposed_free_day}, actor=actor
+        db,
+        week,
+        free_day_pins={proposal.user_id: proposal.proposed_free_day},
+        actor=actor,
+        sacrifice_grants={proposal.user_id: proposal.proposed_free_day},
     )
     audit.record(
         db,

@@ -66,7 +66,10 @@ def test_h2_at_most_one_role_per_slot_per_worker() -> None:
 
 
 def test_h3_exactly_one_free_day_mon_thu_per_core() -> None:
-    """H3: each core worker has exactly one free day in Mon–Thu, worked zero."""
+    """H3 on a no-grant solve: each core worker has exactly one free day, inside
+    the default Mon–Thu domain, and works zero slots on it. (A §2.3 grant widens
+    that domain for one worker — see `tests/solver/test_sacrifice_grant.py`; the
+    cardinality asserted here holds in both cases.)"""
     res = _feasible_result()
     for wid in CORE_IDS:
         free = free_day_of(res.assignments, wid)
@@ -75,8 +78,9 @@ def test_h3_exactly_one_free_day_mon_thu_per_core() -> None:
 
 
 def test_h4_one_slot_per_non_free_weekday_and_friday_always_worked() -> None:
-    """H4: on every non-free Mon–Fri day a core works exactly one slot; Friday
-    is never a free day (H3 restricts free to Mon–Thu) so it is always worked."""
+    """H4: on every non-free Mon–Fri day a core works exactly one slot. On this
+    no-grant solve Friday is outside every free-day domain (H3's default is
+    Mon–Thu), so it is always worked."""
     res = _feasible_result()
     for wid in CORE_IDS:
         free = free_day_of(res.assignments, wid)
@@ -84,7 +88,7 @@ def test_h4_one_slot_per_non_free_weekday_and_friday_always_worked() -> None:
         for day in SOLVER_DAYS:
             expected = 0 if day == free else 1
             assert len(days.get(day, [])) == expected, f"worker {wid} {day}"
-        assert len(days.get(Day.FRI, [])) == 1  # H3: Friday is never free
+        assert len(days.get(Day.FRI, [])) == 1  # H3: no grant here, so Friday is never free
 
 
 def test_h5_solver_never_emits_a_weekend_assignment() -> None:

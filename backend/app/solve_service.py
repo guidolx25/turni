@@ -14,12 +14,14 @@ few `select(User)` sites that deliberately does NOT go through `visible_users_st
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session as DbSession
 
 from app import audit
 from app.db import utcnow
-from app.enums import AssignmentSource, UserRole, WeekStatus
+from app.enums import AssignmentSource, Day, UserRole, WeekStatus
 from app.models import Assignment, Constraint, SolverState, User, Week
 from app.solver import (
     PersonalConstraint,
@@ -63,12 +65,16 @@ def build_solver_input(
     db: DbSession,
     week: Week,
     roster: tuple[WorkerRef, ...],
-    free_day_pins: dict[int, object] | None = None,
+    free_day_pins: Mapping[int, Day] | None = None,
+    sacrifice_grants: Mapping[int, Day] | None = None,
 ) -> SolverInput:
     """Assemble the pure `SolverInput` for `week` from §6 rows.
 
-    `free_day_pins` is empty for a normal solve; the §2.3 sacrifice re-solve passes
-    a worker's newly accepted free day here to re-run under that pin.
+    Both `free_day_pins` and `sacrifice_grants` are EMPTY for a normal solve — so a
+    normal solve's H3 domains are exactly Mon–Thu. The §2.3 flow passes both: the
+    grant widens the worker's free-day domain to the conflicted day (H3), and the
+    pin forces the free day onto it. The grant is what makes such a pin legal, so
+    the two travel together on the probe and on the accepted re-solve.
     """
     constraints = tuple(
         PersonalConstraint(worker_id=c.user_id, day=c.day, slot=c.slot, kind=c.kind)
@@ -79,6 +85,7 @@ def build_solver_input(
         roster=roster,
         constraints=constraints,
         free_day_pins=free_day_pins or {},
+        sacrifice_grants=sacrifice_grants or {},
         prior_state=_load_prior_state(db),
         # §2.2 S2c: the rest-spread F-pair derived structurally from THIS week's H5
         # template, so the term fires on a first-ever week too (empty prior_state).
@@ -90,8 +97,9 @@ def build_solver_input(
 def run_solve(
     db: DbSession,
     week: Week,
-    free_day_pins: dict[int, object] | None = None,
+    free_day_pins: Mapping[int, Day] | None = None,
     actor: User | None = None,
+    sacrifice_grants: Mapping[int, Day] | None = None,
 ) -> SolverResult:
     """Solve `week` and persist the outcome (§3.2, §8).
 
@@ -100,9 +108,12 @@ def run_solve(
     week is never downgraded, and a re-solve of an already-`solved` week stays
     `solved` — the OPEN→SOLVED transition is one-way here. On a feasible result,
     replaces the generated assignment rows with the new schedule plus the fixed H5
-    weekend template. On INFEASIBLE, writes no assignments and leaves the blocking
-    constraints on the result for the §2.3 sacrifice flow — the feasible/infeasible
-    distinction is carried by whether solver rows were written, not by the status.
+    weekend template. On INFEASIBLE, it CLEARS the generated rows and leaves the
+    blocking constraints on the result for the §2.3 sacrifice flow — the
+    feasible/infeasible distinction is carried by whether solver rows were written,
+    not by the status, so a week parked on a conflict must not keep the stale rows
+    of an earlier feasible solve. Leaving them would let §3.3's "never published
+    with an unresolved conflict" be violated by publishing that stale schedule.
 
     `actor` is the human who triggered the solve (admin/root), or None for the
     §11 cron. Every solve is audited (§5 audit log): the transition is recorded in
@@ -110,9 +121,16 @@ def run_solve(
     window that closed.
     """
     roster = build_roster(db)
-    result = solve(build_solver_input(db, week, roster, free_day_pins))
+    # §2.3: the accept path passes the grant alongside the pin — the grant is what
+    # makes the pinned day a legal H3 free day. Both empty on a normal solve.
+    result = solve(build_solver_input(db, week, roster, free_day_pins, sacrifice_grants))
 
-    if result.status is not SolverStatus.INFEASIBLE:
+    if result.status is SolverStatus.INFEASIBLE:
+        # The week is parked on an unresolved conflict: drop any schedule an earlier
+        # feasible solve left behind, so "no solver rows" honestly means "unresolved"
+        # and a stale schedule can never be published (§3.3).
+        _clear_generated_assignments(db, week)
+    else:
         _replace_generated_assignments(db, week, roster, result)
     week.solved_at = utcnow()
     if week.status is WeekStatus.OPEN:
@@ -147,16 +165,22 @@ def _load_prior_state(db: DbSession) -> dict[int, PriorSlot]:
     return prior
 
 
-def _replace_generated_assignments(
-    db: DbSession, week: Week, roster: tuple[WorkerRef, ...], result: SolverResult
-) -> None:
-    """Idempotent (re)generate: drop this week's solver + weekend-template rows and
-    write the fresh set. Swap/override rows are left untouched (§4/§5)."""
+def _clear_generated_assignments(db: DbSession, week: Week) -> None:
+    """Drop this week's solver + weekend-template rows. Swap/override rows authored
+    elsewhere (§4/§5) survive — this module only owns what it generated."""
     db.execute(
         delete(Assignment).where(
             Assignment.week_id == week.id, Assignment.source.in_(_GENERATED_SOURCES)
         )
     )
+
+
+def _replace_generated_assignments(
+    db: DbSession, week: Week, roster: tuple[WorkerRef, ...], result: SolverResult
+) -> None:
+    """Idempotent (re)generate: drop this week's solver + weekend-template rows and
+    write the fresh set. Swap/override rows are left untouched (§4/§5)."""
+    _clear_generated_assignments(db, week)
     for a in result.assignments:
         db.add(
             Assignment(

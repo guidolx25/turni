@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Mapping
 
 from ortools.sat.python import cp_model
 
@@ -18,10 +17,8 @@ from app.enums import (
     AssignmentSlot,
     ConstraintKind,
     ConstraintSlot,
-    Day,
 )
 from app.solver.types import (
-    FREE_DAYS,
     SOLVER_DAYS,
     ObjectiveBreakdown,
     PersonalConstraint,
@@ -31,6 +28,7 @@ from app.solver.types import (
     SolverResult,
     SolverStatus,
     WorkerRef,
+    free_day_domain,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,23 +44,6 @@ def _single_role(worker: WorkerRef) -> AssignmentRole:
     """The lone worked role of a core worker (H4 works exactly one slot in it)."""
     (role,) = tuple(worker.compatible_roles)
     return role
-
-
-def _free_domain(worker: WorkerRef, pins: Mapping[int, Day]) -> tuple[Day, ...]:
-    """The days `worker`'s single free day may fall on.
-
-    Normally Mon–Thu (H3). The §2.3 sacrifice extends one worker's domain to a
-    pinned *conflicted* day — a hard unavailability the standard domain can't
-    absorb, e.g. a Friday off (which H4 otherwise forces worked). Pinning the free
-    day there both creates the option and honors the hard request as a full day
-    off, rather than dropping it. Any pin already inside Mon–Thu leaves the domain
-    unchanged, so existing solves (and the golden test) are unaffected.
-    """
-    domain = list(FREE_DAYS)
-    pin = pins.get(worker.id)
-    if pin is not None and pin in SOLVER_DAYS and pin not in domain:
-        domain.append(pin)
-    return tuple(domain)
 
 
 def solve(inp: SolverInput) -> SolverResult:
@@ -86,12 +67,19 @@ def solve(inp: SolverInput) -> SolverResult:
                 for r in w.compatible_roles:
                     x[(w.id, d, s, r)] = model.NewBoolVar(f"x_{w.id}_{d}_{s}_{r}")
 
-    # free[(uid, day)] — core workers only, over each worker's free-day domain
-    # (Mon–Thu by H3, plus a §2.3-pinned conflicted day; see `_free_domain`).
+    # free[(uid, day)] — core workers only, over each worker's H3 domain D(u) (§8).
+    # H3 + §2.3 sacrifice grant: D(u) is Mon–Thu, widened to Mon–Thu ∪ {g} for a
+    # worker carrying a grant for day g. `free_day_domain` returns FREE_DAYS itself
+    # when no grant applies, so a normal solve's domains are exactly Mon–Thu by
+    # construction. Held per worker because a grant is per worker: the domains are
+    # NOT uniform across the roster, and every downstream loop must use D(u) rather
+    # than FREE_DAYS or the `free` keys and the iteration will silently disagree.
+    domain: dict[int, tuple[object, ...]] = {}
     free: dict[tuple[int, object], cp_model.IntVar] = {}
     for w in roster:
         if w.is_core:
-            for d in _free_domain(w, inp.free_day_pins):
+            domain[w.id] = free_day_domain(w.id, inp.sacrifice_grants)
+            for d in domain[w.id]:
                 free[(w.id, d)] = model.NewBoolVar(f"free_{w.id}_{d}")
 
     def works_slot(uid: int, d: object, s: AssignmentSlot) -> cp_model.LinearExpr:
@@ -114,17 +102,22 @@ def solve(inp: SolverInput) -> SolverResult:
                 for s in _SLOTS:
                     model.Add(sum(x[(w.id, d, s, r)] for r in w.compatible_roles) <= 1)
 
-    # --- H3: exactly one free day in the domain; zero slots on it -------------
+    # --- H3: exactly one free day within D(u); zero slots on it ---------------
     for w in roster:
         if not w.is_core:
             continue
-        domain = _free_domain(w, inp.free_day_pins)
-        model.Add(sum(free[(w.id, d)] for d in domain) == 1)
-        # Pinned free day (golden test / §2.3 re-solve). H3 forces the rest to 0.
+        # H3 cardinality — UNCHANGED by a §2.3 grant: still exactly one free day.
+        # The grant widens the set this sum ranges over, never the count (§2.1 H3).
+        model.Add(sum(free[(w.id, d)] for d in domain[w.id]) == 1)
+        # Pinned free day (golden test / §2.3 re-solve): it FORCES the free day
+        # onto that day, within D(u). A pin outside D(u) has no variable to force
+        # and is ignored — the §2.3 accept path always passes the matching grant
+        # alongside the pin (that is what makes a Friday pin legal), so this is a
+        # belt-and-braces guard against a pin arriving without its grant.
         pin = inp.free_day_pins.get(w.id)
-        if pin is not None and pin in domain:
+        if pin is not None and pin in domain[w.id]:
             model.Add(free[(w.id, pin)] == 1)
-        for d in domain:
+        for d in domain[w.id]:
             for s in _SLOTS:
                 for r in w.compatible_roles:
                     # On the free day the worker works zero slots.
@@ -135,14 +128,15 @@ def solve(inp: SolverInput) -> SolverResult:
         if not w.is_core:
             continue
         r_u = _single_role(w)
-        domain = _free_domain(w, inp.free_day_pins)
         for d in SOLVER_DAYS:
             worked = sum(x[(w.id, d, s, r_u)] for s in _SLOTS)
-            if d in domain:
+            if d in domain[w.id]:
                 # A day this worker may rest on: worked iff it is not their free day.
                 model.Add(worked == 1 - free[(w.id, d)])
             else:
-                # Not a free-day option (normally Fri, H3): always worked (H4).
+                # Outside D(u) there is no free var, so H4 forces the day worked.
+                # This is what makes Friday unfreeable on a normal solve — and what
+                # a §2.3 grant lifts for the granted worker alone (§2.3 corollary).
                 model.Add(worked == 1)
 
     # H5 is NOT modelled (weekend template, emitted elsewhere).
@@ -157,6 +151,9 @@ def solve(inp: SolverInput) -> SolverResult:
             continue
         if c.day not in SOLVER_DAYS or c.worker_id not in by_id:
             # Weekend days / unknown workers have no Mon–Fri variables to block.
+            # H5 fixes Sat/Sun as a template, so a hard weekend request is not
+            # droppable here without becoming silent (§2.3): it is escalated to
+            # the admin at submission instead (`constraints._escalate_weekend_hard`).
             continue
         w = by_id[c.worker_id]
         lit = model.NewBoolVar(f"hard_{c.worker_id}_{c.day}_{c.slot}")
@@ -237,7 +234,21 @@ def solve(inp: SolverInput) -> SolverResult:
     for i in range(len(full_weekend_ids)):
         for j in range(i + 1, len(full_weekend_ids)):
             u, v = full_weekend_ids[i], full_weekend_ids[j]
-            for d in FREE_DAYS:
+            # H3 + §2.3: iterate the days BOTH can actually rest on — D(u) ∩ D(v) —
+            # not FREE_DAYS. Under a grant the `free` keys are a strict superset of
+            # FREE_DAYS, so a FREE_DAYS loop would be partial over the real domain.
+            # A day only one of them holds cannot be *shared*, so the intersection
+            # is the exact, total support of this term.
+            #
+            # A granted (Friday) day DOES count when both hold it, deliberately: the
+            # term penalizes two full-weekend workers resting together because it
+            # leaves their spiaggino role covered by the jolly alone for a whole day
+            # (§2.2) — a rationale about coverage, which is day-agnostic. Excluding
+            # the granted day would hand the solver a penalty-free way to co-locate
+            # exactly the pair this term exists to spread. (In the implemented §2.3
+            # flow only one worker is ever granted at a time, so the intersection is
+            # FREE_DAYS in practice; the general rule is what is encoded.)
+            for d in (d for d in domain[u] if d in domain[v]):
                 both = model.NewBoolVar(f"spread_{u}_{v}_{d}")
                 # both = AND(free[u][d], free[v][d]); min pulls it to max(0,sum-1).
                 # H3 gives each exactly one free day, so at most one d fires per pair.
@@ -466,8 +477,14 @@ def _breakdown(assignments: tuple[SlotAssignment, ...], inp: SolverInput) -> Obj
     )
 
     def free_day(uid: int) -> object | None:
-        worked_days = {d for d in FREE_DAYS if any(works(uid, d, s) for s in _SLOTS)}
-        rest = [d for d in FREE_DAYS if d not in worked_days]
+        # H3 + §2.3: scan the worker's ACTUAL domain D(u), including any granted
+        # day — NOT FREE_DAYS. Scanning Mon–Thu under a Friday grant finds all four
+        # worked, returns None, and silently zeroes this pair's spread contribution,
+        # so the LOGGED breakdown would diverge from what CP-SAT actually minimized.
+        # §8 requires the reported breakdown to be the minimized value, so the
+        # divergence would be a real defect, not a cosmetic one.
+        domain = free_day_domain(uid, inp.sacrifice_grants)
+        rest = [d for d in domain if not any(works(uid, d, s) for s in _SLOTS)]
         return rest[0] if len(rest) == 1 else None
 
     free_by_id = {uid: free_day(uid) for uid in full_weekend_ids}

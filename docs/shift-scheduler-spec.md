@@ -1,6 +1,6 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.3 (2026-07-19) · **Status:** Approved for build
+**Version:** 1.4 (2026-07-20) · **Status:** Approved for build
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -28,6 +28,8 @@ A bilingual (IT/EN) web platform that schedules weekly shifts for a beach establ
 - **H1 — Coverage (Mon–Fri):** every slot has exactly one bagnino ∈ {Matteo, Francesco, Mattia} and exactly one spiaggino ∈ {Pasha, Amir, Mattia}.
 - **H2 — One role per slot:** a person occupies at most one role in a given slot (Mattia cannot be bagnino and spiaggino simultaneously).
 - **H3 — Free day:** each core worker (Matteo, Francesco, Pasha, Amir) has exactly **one** free day per week, restricted to **Mon–Thu**. On the free day they work zero slots.
+
+  **Sacrifice grant (§2.3).** The Mon–Thu restriction is the *default* domain, not the whole rule. The domain is parameterized by an optional per-worker **sacrifice grant**: for a worker holding a grant for day `g`, the free-day domain is **Mon–Thu ∪ {g}**. A grant is issued only by the §2.3 sacrifice flow, only for the day named in the blocking hard constraint, and only for the week in question — never by a normal solve, where every domain is exactly Mon–Thu. Exactly one free day still holds (H3's cardinality is untouched); the grant widens *where* it may fall, and nothing else.
 - **H4 — One slot per working day:** on non-free weekdays (Mon–Fri), each core worker works exactly one slot (AM xor PM).
 - **H5 — Weekend template (fixed, never solved):**
   - Saturday: Matteo AM, Francesco PM (bagnini); Pasha and Amir full-day.
@@ -53,6 +55,17 @@ Weight separation: `W1 >> {W2, W2_SPREAD} >> W3` (e.g., 10 000 / 100 / 200 / 1 �
 2. If the conflict involves a core worker's hard slot request colliding with free-day placement: propose to **that worker**: *"No feasible schedule. Move your free day to {day}?"* (in-app + email, requires explicit accept/decline).
 3. On accept → re-solve with the free day pinned. On decline → escalate to admin (Mattia) with the conflict explanation.
 4. Never resolve silently.
+
+**What is being traded.** The worker sacrifices their *weekday free-day placement*, never their hard request. H7 is inviolable: an accepted proposal still honors the hard unavailability in full — the worker asked to be off day `{day}` and is off day `{day}`, having given up the Mon–Thu free day they would otherwise have taken. A proposal never withdraws, downgrades, or supersedes the request that caused the conflict.
+
+**Mechanics — domain extension, not a bare pin.** The probe in step 2 and the re-solve in step 3 both carry a **sacrifice grant** (H3) extending that one worker's free-day domain to the conflicted day: `Mon–Thu ∪ {day}`. This is load-bearing and must not be reduced to pinning a free day inside Mon–Thu. A pin alone only *adds* `free[u][d] = 1` to an otherwise unchanged model, so the probe's feasible region would be a subset of the plain solve's — an INFEASIBLE week would stay INFEASIBLE under every pin and step 2 could never fire. The grant is what makes the propose branch reachable at all.
+
+**Corollary — Friday is the only reachable sacrifice day.** Proposals fire **iff** the unsat core implicates a hard constraint on a **Friday** and the Friday-extended probe is feasible. The other days are unreachable by construction:
+- **Mon–Thu** — self-placing. A hard full-day request on a Mon–Thu day already forces `free[u][d] = 1` through H4, so the plain solve has placed it already; a grant adds nothing and the residual infeasibility lies elsewhere. Such a conflict escalates (step 3).
+- **Sat/Sun** — H5 makes the weekend a fixed template with no solver variables, so no free-day move can absorb a weekend request. These escalate to the admin at submission time instead (§10 `weekend_hard_escalated`).
+- **Friday** — the sole day that H4 forces worked but H3's default domain cannot free. Hence the only day where extending the domain changes the outcome.
+
+A Friday conflict whose extended probe is *still* infeasible produces no proposal and escalates (step 3) like any other.
 
 ---
 
@@ -201,7 +214,7 @@ Auth: `argon2` password hashing, server-side sessions (signed cookie, `HttpOnly`
 
 **Variables** (Mon–Fri only; weekend is template):
 
-- `free[u][d]` ∈ Bool for core u, d ∈ {Mon..Thu}, with Σ_d free[u][d] = 1.
+- `free[u][d]` ∈ Bool for core u, d ∈ D(u), with Σ_d free[u][d] = 1. The domain `D(u)` is `{Mon..Thu}` for every worker on a normal solve, and `{Mon..Thu} ∪ {g}` for a worker carrying a §2.3 sacrifice grant for day `g` (in practice `g = Fri`; see the §2.3 corollary). The cardinality constraint is unchanged in either case.
 - `x[u][d][s][r]` ∈ Bool: user u works day d, slot s, role r — restricted to role-compatible (u,r) pairs (Mattia compatible with both).
 
 **Constraints:** direct encodings of H1–H7. Hard personal constraints enter as **assumption literals** so infeasibility explanations name the responsible constraint (feeds the sacrifice flow).

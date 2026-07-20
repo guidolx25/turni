@@ -12,6 +12,7 @@ import datetime as dt
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.orm import Session as DbSession
 
 from app.deps import CurrentAdmin, DbDep
 from app.enums import SacrificeStatus, WeekStatus
@@ -61,15 +62,7 @@ def admin_solve(week: dt.date, admin: CurrentAdmin, db: DbDep) -> SolveResultOut
     if week_row.status is WeekStatus.LOCKED:
         # §3.4: a published week is immutable to solves — swaps/override only.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ERROR_ALREADY_LOCKED)
-    pending = db.scalar(
-        select(SacrificeProposal.id)
-        .where(
-            SacrificeProposal.week_id == week_row.id,
-            SacrificeProposal.status == SacrificeStatus.PENDING,
-        )
-        .limit(1)
-    )
-    if pending is not None:
+    if _has_pending_sacrifice(db, week_row):
         # §2.3: resolve the open proposal before re-solving; never duplicate it.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ERROR_SACRIFICE_PENDING)
     result = run_solve(db, week_row, actor=admin)
@@ -90,8 +83,30 @@ def admin_publish(week: dt.date, admin: CurrentAdmin, db: DbDep) -> WeekOut:
     publish a required step an INFEASIBLE solve cannot reach — see
     `app.publish_service`. 409 if not solved (or parked in `solved` with no feasible
     rows) or already locked; 404 if the week does not exist.
+
+    §3.3 "never published with an unresolved conflict" is checked HERE and
+    explicitly: a PENDING §2.3 proposal → 409 `sacrifice_pending`, the same guard
+    `/admin/solve` applies. Relying on `publish_service`'s no-solver-rows test
+    instead would be an indirect signal that a week solved feasibly *before* the
+    conflict arose would pass.
     """
     week_row = db.scalar(select(Week).where(Week.monday_date == week))
     if week_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_WEEK_NOT_FOUND)
+    if _has_pending_sacrifice(db, week_row):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ERROR_SACRIFICE_PENDING)
     return WeekOut.from_week(publish_week(db, week_row, admin))
+
+
+def _has_pending_sacrifice(db: DbSession, week: Week) -> bool:
+    """§2.3: is this week parked on an unresolved sacrifice conversation? Shared by
+    solve and publish so the two cannot drift on what "unresolved" means."""
+    pending = db.scalar(
+        select(SacrificeProposal.id)
+        .where(
+            SacrificeProposal.week_id == week.id,
+            SacrificeProposal.status == SacrificeStatus.PENDING,
+        )
+        .limit(1)
+    )
+    return pending is not None

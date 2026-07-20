@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session as DbSession
 from app.enums import AssignmentSource, ConstraintKind, ConstraintSlot, Day, WeekStatus
 from app.models import Assignment, AuditLog, Constraint, Notification, SacrificeProposal, Week
 from app.publish_service import ERROR_ALREADY_LOCKED
+from app.routers.admin import ERROR_SACRIFICE_PENDING
+from app.sacrifice_service import _create_proposal
 from app.scheduling import get_or_create_week, is_submittable
 from app.solve_service import run_solve
 from tests.factories import PASSWORD, create_full_roster
@@ -311,3 +313,154 @@ def test_feasible_solved_week_regenerate_still_allowed(
     session.expire_all()
     week = session.scalar(select(Week).where(Week.monday_date == monday))
     assert week is not None and week.status is WeekStatus.SOLVED
+
+
+# --- INFEASIBLE re-solve clears the stale schedule (§3.3) --------------------
+
+
+def _make_infeasible(session: DbSession, roster: dict, week: Week) -> None:
+    """All three bagnini hard-off Monday — no legal coverage for Monday (H1)."""
+    for name in ("matteo", "francesco", "mattia"):
+        session.add(
+            Constraint(
+                user_id=roster[name].id,
+                week_id=week.id,
+                day=Day.MON,
+                slot=ConstraintSlot.FULL_DAY,
+                kind=ConstraintKind.HARD,
+            )
+        )
+    session.commit()
+
+
+def test_infeasible_resolve_clears_the_previous_feasible_schedule(
+    client: TestClient, session: DbSession
+) -> None:
+    """§3.3: a week parked on an unresolved conflict must not keep the schedule an
+    EARLIER feasible solve wrote. `publish_service` reads "no solver rows" as the
+    truthful unresolved signal, so stale rows surviving an INFEASIBLE re-solve
+    would let §3.3's "never published with an unresolved conflict" be violated by
+    publishing that stale schedule.
+    """
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+
+    first = run_solve(session, week)
+    assert first.status.value in ("optimal", "feasible")
+    assert _generated_snapshot(session, week.id), "the feasible solve left rows to clear"
+
+    _make_infeasible(session, roster, week)
+    second = run_solve(session, week)
+    assert second.status.value == "infeasible"
+
+    session.expire_all()
+    assert _generated_snapshot(session, week.id) == set(), (
+        "an INFEASIBLE re-solve must clear the stale generated schedule"
+    )
+    # And the week is consequently unpublishable — the backstop actually engages.
+    login(client, "mattia")
+    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    assert resp.status_code == 409, resp.text
+
+
+def test_infeasible_resolve_preserves_swap_and_override_rows(
+    client: TestClient, session: DbSession
+) -> None:
+    """§4/§5: the solve adapter owns only what it generated. Rows authored by a
+    swap or an admin override survive an INFEASIBLE re-solve untouched, even as
+    the SOLVER/WEEKEND_TEMPLATE rows are cleared."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    assert run_solve(session, week).status.value in ("optimal", "feasible")
+
+    # Restamp two generated rows as swap/override authored, as those flows would.
+    generated = session.scalars(
+        select(Assignment)
+        .where(Assignment.week_id == week.id, Assignment.source == AssignmentSource.SOLVER)
+        .order_by(Assignment.id)
+    ).all()
+    assert len(generated) >= 2
+    generated[0].source = AssignmentSource.SWAP
+    generated[1].source = AssignmentSource.OVERRIDE
+    session.commit()
+    preserved = {(a.id, a.day, a.slot, a.role, a.user_id, a.source) for a in generated[:2]}
+
+    _make_infeasible(session, roster, week)
+    assert run_solve(session, week).status.value == "infeasible"
+
+    session.expire_all()
+    survivors = session.scalars(
+        select(Assignment).where(
+            Assignment.week_id == week.id,
+            Assignment.source.in_((AssignmentSource.SWAP, AssignmentSource.OVERRIDE)),
+        )
+    ).all()
+    assert {(a.id, a.day, a.slot, a.role, a.user_id, a.source) for a in survivors} == preserved, (
+        "swap/override rows are not the solver's to delete"
+    )
+    assert _generated_snapshot(session, week.id) == set()  # generated rows still cleared
+
+
+# --- publish refuses an open §2.3 conversation (§3.3) ------------------------
+
+
+def test_publish_refuses_pending_sacrifice_even_with_solver_rows_present(
+    client: TestClient, session: DbSession
+) -> None:
+    """§3.3 "never published with an unresolved conflict", checked EXPLICITLY.
+
+    The hazard the indirect `_has_solver_rows` backstop misses: a week that solved
+    FEASIBLY (so solver rows exist and the backstop is satisfied) while a PENDING
+    §2.3 proposal is still open. `/admin/publish` must refuse it with 409
+    `sacrifice_pending` — the same guard `/admin/solve` applies — and leave the
+    week in SOLVED with its rows intact.
+    """
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    assert run_solve(session, week).status.value in ("optimal", "feasible")
+    rows_before = _generated_snapshot(session, week.id)
+    assert rows_before, "the precondition is a FEASIBLE week: solver rows are present"
+
+    _create_proposal(session, week, roster["pasha"].id, Day.THU, conflict_note="conflict")
+
+    login(client, "mattia")
+    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == ERROR_SACRIFICE_PENDING
+
+    session.expire_all()
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status is WeekStatus.SOLVED  # not locked
+    assert _generated_snapshot(session, week.id) == rows_before  # nothing disturbed
+
+
+def test_publish_allowed_once_the_pending_proposal_is_resolved(
+    client: TestClient, session: DbSession
+) -> None:
+    """The guard is about PENDING specifically: once the proposal is declined the
+    conversation is closed, and publish proceeds (the guard does not over-fire on
+    a resolved conversation and wedge the week forever)."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    assert run_solve(session, week).status.value in ("optimal", "feasible")
+    proposal = _create_proposal(
+        session, week, roster["pasha"].id, Day.THU, conflict_note="conflict"
+    )
+
+    login(client, "mattia")
+    assert client.post("/admin/publish", params={"week": monday.isoformat()}).status_code == 409
+
+    login(client, "pasha")
+    assert client.post(f"/sacrifice/{proposal.id}/decline").status_code == 200
+
+    login(client, "mattia")
+    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    assert resp.status_code == 200, resp.text
+
+    session.expire_all()
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None and week.status is WeekStatus.LOCKED

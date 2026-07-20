@@ -13,6 +13,8 @@ from app.solver.continuity import (
     compute_next_solver_state,
 )
 from app.solver.types import (
+    FREE_DAYS,
+    SOLVER_DAYS,
     ObjectiveBreakdown,
     PersonalConstraint,
     PriorSlot,
@@ -22,6 +24,7 @@ from app.solver.types import (
     SolverStatus,
     Weights,
     WorkerRef,
+    free_day_domain,
     solve,
 )
 from app.solver.weekend import (
@@ -31,6 +34,8 @@ from app.solver.weekend import (
 )
 
 __all__ = [
+    "FREE_DAYS",
+    "SOLVER_DAYS",
     "ObjectiveBreakdown",
     "PersonalConstraint",
     "PriorSlot",
@@ -45,6 +50,7 @@ __all__ = [
     "as_prior_state",
     "compute_next_solver_state",
     "emit_weekend_template",
+    "free_day_domain",
     "full_weekend_worker_ids",
     "solve",
 ]

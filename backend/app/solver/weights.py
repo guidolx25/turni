@@ -13,7 +13,32 @@ where ``W2`` and ``W2_SPREAD`` both sit in the S2 band (``W2_SPREAD`` above a
 single ``W2`` alternation unit but far below ``W1``).
 
 Worst-case bounds (this week's model has 4 core workers + 1 jolly = 5 workers,
-Mon–Fri, two slots):
+Mon–Fri, two slots).
+
+**Validity under the §2.3 sacrifice grant.** H3's free-day domain is no longer
+uniformly Mon–Thu: a granted worker's domain is ``Mon–Thu ∪ {g}``, strictly larger.
+Every bound below was re-derived against that widened domain and every one is
+UNCHANGED, because each is a function of the worker/day/pair COUNTS and of H3's
+*cardinality* — exactly one free day — which the grant explicitly does not touch.
+The grant moves *where* a free day falls, never how many there are, so:
+
+* ``Cmax`` is a count of weekdays (5) — no dependence on the free-day domain.
+* ``Bmax``'s alternation part counts break variables, fixed by (workers ×
+  adjacent-day-pairs × slots) + boundary — no dependence on the domain. Its
+  fairness part rests on "a core worker works exactly 4 of the 5 weekdays", which
+  still holds verbatim: exactly one free day inside D(u), every day outside D(u)
+  forced worked by H4, so 5 − 1 = 4 either way. Only *which* 4 changes.
+* ``Smax`` is C(|F|, 2) — a count of PAIRS. The number of candidate shared days
+  per pair rose from 4 to at most 5, but a pair can still share at most one day
+  because each worker still has exactly one free day. So the bound is unmoved.
+
+The split-forcing inequality (a) is likewise unmoved: the only alternation saving
+co-location buys is the second worker dodging the cross-week Monday boundary, which
+requires the SHARED day to be Monday — a Mon–Thu day in every domain. Resting on a
+granted Friday means working Monday and taking the boundary break exactly as any
+other non-Monday rest does, so widening the domain adds no new saving to beat.
+(And in the implemented §2.3 flow only one worker is ever granted at a time, so two
+full-weekend workers can never share a *granted* day at all.)
 
 * ``Cmax`` — max S3 ``jolly_days`` = 5 (the jolly can work on every one of the
   five weekdays).
@@ -25,15 +50,16 @@ Mon–Fri, two slots):
       Monday boundary: ≤ 2 slots per worker (the FULL_DAY prior collides on both)
       -> 5*2 = 10. So alternation_breaks ≤ 40 + 10 = 50.
     - fairness_deviation: |#AM − #PM| per worker. A core worker works exactly one
-      slot on each of 4 worked days -> ≤ 4; the jolly works ≤ 5 AM + ≤ 5 PM ->
+      slot on each of 4 worked days (5 weekdays minus its single H3 free day,
+      wherever in D(u) that falls) -> ≤ 4; the jolly works ≤ 5 AM + ≤ 5 PM ->
       ≤ 5. Sum over workers ≤ 4*4 + 5 = 21.
     - Bmax = 50 + 21 = 71.
 
 * ``Smax`` — max S2 ``spread_shared_pairs`` = C(|F|, 2), where F is the set of
   full-weekend workers (prior state FULL_DAY: the two full-day spiaggini). Each
-  core has exactly one free day (H3), so a pair "shares" iff their single free
-  days coincide — at most one shared day per pair. With |F| = 2 that is
-  C(2, 2) = 1.
+  core has exactly one free day (H3 cardinality, grant or no grant), so a pair
+  "shares" iff their single free days coincide — at most one shared day per pair.
+  With |F| = 2 that is C(2, 2) = 1.
 
 Separation.
 

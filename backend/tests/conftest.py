@@ -22,6 +22,7 @@ with the test's own migrated Session, which `api_client_factory` does.
 from __future__ import annotations
 
 import itertools
+import logging
 import os
 import shutil
 import tempfile
@@ -72,6 +73,27 @@ def database_url(url: str) -> Iterator[None]:
         yield
     finally:
         settings.database_url = previous
+
+
+@pytest.fixture(autouse=True)
+def _app_loggers_enabled() -> None:
+    """Undo the collateral damage `alembic/env.py` does to logging.
+
+    `env.py` calls `logging.config.fileConfig(alembic.ini)`, which defaults to
+    `disable_existing_loggers=True` and therefore sets `disabled = True` on every
+    logger that already exists — including all of `app.*`. Any alembic run
+    (`run_upgrade`, `run_downgrade`, `command.check`) silences the application's
+    loggers for the REST OF THE SESSION, because the schema template is built once
+    per session and `test_migration` runs more migrations besides.
+
+    The effect is that log-based assertions pass vacuously: nothing is ever
+    captured, so "the expected error was logged" and "no error was logged" are
+    indistinguishable. Autouse and function-scoped so no ordering between a
+    migration test and a logging test can reintroduce it.
+    """
+    for lg in logging.root.manager.loggerDict.values():
+        if isinstance(lg, logging.Logger) and lg.name.startswith("app"):
+            lg.disabled = False
 
 
 def run_upgrade(url: str, revision: str = "head") -> None:

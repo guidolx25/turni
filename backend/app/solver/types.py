@@ -30,8 +30,40 @@ from app.enums import (
 # template (H5) and never appear as a variable, an input day, or an output row.
 SOLVER_DAYS: tuple[Day, ...] = (Day.MON, Day.TUE, Day.WED, Day.THU, Day.FRI)
 
-# H3: a core worker's free day is one of Mon–Thu (never Fri, never the weekend).
+# H3: a core worker's DEFAULT free-day domain is Mon–Thu. This is the whole domain
+# on every normal solve; §2.3 may widen it for one worker via a sacrifice grant
+# (see `free_day_domain`).
 FREE_DAYS: tuple[Day, ...] = (Day.MON, Day.TUE, Day.WED, Day.THU)
+
+
+def free_day_domain(worker_id: int, sacrifice_grants: Mapping[int, Day]) -> tuple[Day, ...]:
+    """H3 + §2.3 sacrifice grant: the days worker ``worker_id`` may take free.
+
+    ``FREE_DAYS`` (Mon–Thu) by default; ``FREE_DAYS ∪ {g}`` for a worker holding a
+    grant for day ``g`` (§2.1 H3, §8). H3's *cardinality* — exactly one free day —
+    is untouched by a grant; only *where* it may fall widens.
+
+    This is the single place the domain is computed, so "a normal solve's domains
+    are exactly Mon–Thu" holds **by construction**, not by convention: with no
+    grant for ``worker_id`` the function returns the ``FREE_DAYS`` tuple itself.
+
+    Two days are deliberately not extendable, matching the §2.3 corollary:
+
+    - A grant for a day already in ``FREE_DAYS`` is a no-op (nothing to widen) —
+      such a conflict is self-placing and needs no grant.
+    - A grant for Sat/Sun is REFUSED. H5 makes the weekend a fixed template with
+      no solver variables, so a weekend free var would satisfy H3's cardinality
+      without freeing any weekday — the worker would work all five weekdays and
+      H3 would be silently void. Weekend hard requests escalate instead (§2.3).
+
+    Friday is therefore the only day a grant actually changes, exactly as the
+    §2.3 corollary predicts — but that is a *consequence* of these rules, not a
+    special case written into them.
+    """
+    grant = sacrifice_grants.get(worker_id)
+    if grant is None or grant in FREE_DAYS or grant not in SOLVER_DAYS:
+        return FREE_DAYS
+    return (*FREE_DAYS, grant)
 
 
 class SolverStatus(enum.StrEnum):
@@ -140,6 +172,17 @@ class SolverInput:
     # and by the §2.3 sacrifice re-solve. A worker absent here has a
     # solver-chosen free day (H3 still forces exactly one).
     free_day_pins: Mapping[int, Day] = field(default_factory=dict)
+    # H3 + §2.3 sacrifice grant: worker id → the day their free-day domain is
+    # extended to (`Mon–Thu ∪ {day}`). EXPLICIT and first-class, deliberately
+    # distinct from `free_day_pins`: a pin only *forces* a free day the domain
+    # already allows, a grant *widens* the domain. A pin alone can never rescue an
+    # infeasible week — it only adds `free[u][d] = 1`, shrinking the feasible
+    # region — so the grant is what makes the §2.3 propose branch reachable at all.
+    # EMPTY on every normal solve, where all domains are exactly Mon–Thu; issued
+    # only by the §2.3 flow, only for the day named in the blocking hard request,
+    # only for that week. It never touches H7: the hard request is still honored
+    # in full (§2.3 "What is being traded" — the trade is free-day PLACEMENT).
+    sacrifice_grants: Mapping[int, Day] = field(default_factory=dict)
     # S2 cross-week seed: worker id → last-worked boundary. Absent = no prior
     # state (legal first-ever week). See PriorSlot for the FULL_DAY case.
     prior_state: Mapping[int, PriorSlot] = field(default_factory=dict)

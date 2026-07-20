@@ -39,9 +39,16 @@ def publish_week(db: DbSession, week: Week, actor: User | None) -> Week:
 
     Preconditions (SOLVED→LOCKED): the week is `solved` and a feasible solve has
     left solver assignments. An already-`locked` week raises 409 ALREADY_LOCKED; a
-    week that is not `solved`, or one parked in `solved` by an INFEASIBLE run (no
-    solver rows), raises 409 NOT_SOLVED. `actor` is the human who published, or
-    None for the cron.
+    week that is not `solved`, or one parked in `solved` by an INFEASIBLE run,
+    raises 409 NOT_SOLVED — an INFEASIBLE run clears the generated rows
+    (`app.solve_service`), so "no solver rows" is a truthful unresolved signal.
+
+    That signal is a backstop, not the conflict check: §3.3's "never published with
+    an unresolved conflict" is enforced explicitly by the caller
+    (`POST /admin/publish` rejects a PENDING §2.3 proposal), because a pending
+    proposal can coexist with feasible rows from an earlier solve.
+
+    `actor` is the human who published, or None for the cron.
     """
     if week.status is WeekStatus.LOCKED:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ERROR_ALREADY_LOCKED)

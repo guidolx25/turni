@@ -31,6 +31,13 @@ EVENT_SACRIFICE_RESOLVED = "sacrifice_resolved"
 # `sacrifice_escalated` alongside the other `sacrifice_*` events (free-text column,
 # no migration needed) — no behavior change.
 EVENT_SACRIFICE_ESCALATED = "sacrifice_escalated"
+# H5 makes Sat/Sun a fixed template the solver never touches, so a HARD H7 request
+# on a weekend day has no variable to bind and cannot be honored by solving. §2.3
+# forbids resolving that silently, so submission escalates it to the admin, who
+# reconciles it against the template by hand.
+# NOTE: §10's event list does not name this event; it needs §10 reconciliation
+# (event_type is free text per §6, so no migration is required).
+EVENT_WEEKEND_HARD_ESCALATED = "weekend_hard_escalated"
 EVENT_ADMIN_OVERRIDE = "admin_override"
 
 

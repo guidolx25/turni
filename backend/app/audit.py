@@ -19,6 +19,9 @@ ACTION_PUBLISH = "publish"
 ACTION_SOLVE = "solve"
 ACTION_OVERRIDE = "override"
 ACTION_SACRIFICE = "sacrifice"
+# A conflict handed to a human because no automated path can resolve it (today:
+# a HARD H7 request on an H5 template day, escalated at submission).
+ACTION_ESCALATE = "escalate"
 
 
 def record(
