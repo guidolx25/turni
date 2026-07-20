@@ -324,9 +324,9 @@ def test_full_week_friday_conflict_with_infeasible_probe_ends_in_admin_escalatio
     ).all()
     assert [n.user_id for n in escalations] == [roster["mattia"].id]
     core = escalations[0].payload["conflict"]
-    assert any(
-        item["worker_id"] == roster["pasha"].id and item["day"] == "fri" for item in core
-    ), f"the structured core must implicate Pasha's Friday request: {core}"
+    assert any(item["worker_id"] == roster["pasha"].id and item["day"] == "fri" for item in core), (
+        f"the structured core must implicate Pasha's Friday request: {core}"
+    )
 
     # Nothing was published, and the admin cannot publish the conflict away.
     assert (

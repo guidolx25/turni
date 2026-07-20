@@ -265,9 +265,7 @@ def _blocking_core(blocking: tuple[PersonalConstraint, ...]) -> list[dict[str, o
     and no prose — rendering (and localization) is the §9 dictionaries' job.
     Closes the Phase 3 carry-forward that persisted a pre-formatted English
     sentence the dictionaries could never retroactively localize."""
-    return [
-        {"worker_id": c.worker_id, "day": c.day.value, "slot": c.slot.value} for c in blocking
-    ]
+    return [{"worker_id": c.worker_id, "day": c.day.value, "slot": c.slot.value} for c in blocking]
 
 
 def _escalate(
