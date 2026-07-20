@@ -40,6 +40,13 @@ EVENT_SACRIFICE_ESCALATED = "sacrifice_escalated"
 # but never on re-submission of an already-hard row and never on deletion.
 EVENT_WEEKEND_HARD_ESCALATED = "weekend_hard_escalated"
 EVENT_ADMIN_OVERRIDE = "admin_override"
+# §4 swap lifecycle. Requested → the addressed worker; accepted → both parties
+# AND the visible admins (§4 "both parties + admin notified", root excluded via
+# app.visibility); rejected → the requester. §10's event list is closed: the
+# 48 h expiry deliberately has NO event.
+EVENT_SWAP_REQUESTED = "swap_requested"
+EVENT_SWAP_ACCEPTED = "swap_accepted"
+EVENT_SWAP_REJECTED = "swap_rejected"
 
 
 def notify(

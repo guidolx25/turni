@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import enum
 
 from pydantic import model_validator
@@ -50,6 +51,17 @@ class Settings(BaseSettings):
     # --- login rate limit (§7 "simple rate-limit on login") ---
     login_max_attempts: int = 10
     login_window_seconds: int = 15 * 60
+
+    # --- ICS export slot hours (§7 /export/ics, v1.7) ---
+    # Europe/Rome wall-clock bounds of the two §1 slots, used only to give the
+    # calendar VEVENTs concrete times. Deploy-time config per §11 (env
+    # ICS_AM_START etc., "HH:MM"); the defaults are PROVISIONAL — the spec names
+    # the slots but not their opening hours, so the real values are set at
+    # deployment, not here.
+    ics_am_start: dt.time = dt.time(9, 0)
+    ics_am_end: dt.time = dt.time(14, 0)
+    ics_pm_start: dt.time = dt.time(14, 0)
+    ics_pm_end: dt.time = dt.time(19, 0)
 
     @model_validator(mode="after")
     def _resolve_secret_key(self) -> Settings:

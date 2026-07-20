@@ -19,15 +19,18 @@ import datetime as dt
 import logging
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from app.config import settings
-from app.enums import WeekStatus
+from app.enums import SwapStatus, WeekStatus
+from app.models import SwapRequest
 from app.publish_service import publish_week
 from app.sacrifice_service import open_sacrifice
 from app.scheduling import get_or_create_week
 from app.solve_service import run_solve
 from app.solver import SolverResult, SolverStatus
+from app.swap_service import SWAP_TTL, expire_swap
 
 logger = logging.getLogger(__name__)
 
@@ -75,3 +78,28 @@ def run_weekly_solve(db: DbSession, now: dt.datetime) -> SolverResult | None:
     publish_week(db, week, actor=None)  # system action (§6: null audit actor)
     logger.info("weekly solve published %s (%s)", target, result.status.value)
     return result
+
+
+def expire_stale_swaps(db: DbSession, now: dt.datetime) -> int:
+    """§4: sweep `pending` swap requests older than 48 h into `expired`.
+
+    The scheduled half of the expiry (hourly cron, `app.scheduler`); the lazy
+    half lives in `app.swap_service`, which expires an overdue request the moment
+    someone tries to act on or list it — same `expire_swap` transition either
+    way, so both paths audit identically (NULL actor: a timeout has no human
+    actor, §6) and neither notifies (§10's event list names no expiry event).
+    Idempotent: an already-expired row no longer matches the filter. Returns the
+    number of requests expired.
+    """
+    stale = db.scalars(
+        select(SwapRequest).where(
+            SwapRequest.status == SwapStatus.PENDING,
+            SwapRequest.created_at <= now - SWAP_TTL,
+        )
+    ).all()
+    for swap in stale:
+        expire_swap(db, swap, now)
+    if stale:
+        db.commit()
+        logger.info("expired %d stale swap request(s)", len(stale))
+    return len(stale)

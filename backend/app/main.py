@@ -10,10 +10,12 @@ from app.routers import (
     admin,
     auth,
     constraints,
+    ics,
     notifications,
     root,
     sacrifice,
     schedule,
+    swaps,
     weeks,
 )
 from app.scheduler import build_scheduler
@@ -49,6 +51,8 @@ app.include_router(constraints.router)
 app.include_router(schedule.router)
 app.include_router(notifications.router)
 app.include_router(sacrifice.router)
+app.include_router(swaps.router)
+app.include_router(ics.router)
 app.include_router(admin.router)
 
 

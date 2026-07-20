@@ -19,6 +19,9 @@ ACTION_PUBLISH = "publish"
 ACTION_SOLVE = "solve"
 ACTION_OVERRIDE = "override"
 ACTION_SACRIFICE = "sacrifice"
+# §4/§6: every swap_request state transition (request, apply, reject, expire,
+# pending_admin) — the 48 h expiry logs with a NULL actor (system).
+ACTION_SWAP = "swap"
 # A conflict handed to a human because no automated path can resolve it (today:
 # a HARD H7 request on an H5 template day, escalated at submission).
 ACTION_ESCALATE = "escalate"

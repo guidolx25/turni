@@ -22,10 +22,11 @@ from app.enums import (
     Day,
     Language,
     SacrificeStatus,
+    SwapStatus,
     UserRole,
     WeekStatus,
 )
-from app.models import Assignment, Constraint, SacrificeProposal, User, Week
+from app.models import Assignment, Constraint, SacrificeProposal, SwapRequest, User, Week
 from app.permissions import has_admin_capability, has_root_capability
 from app.scheduling import window_deadline
 from app.solver import PersonalConstraint, SolverResult
@@ -129,6 +130,10 @@ class MeOut(UserOut):
     """
 
     capabilities: Capabilities
+    # §6 (v1.7): the /export/ics feed credential — "never serialized to anyone
+    # but its own user". /me IS its own user, and it is the only schema allowed
+    # to carry this; it must never move up into UserOut.
+    ics_token: str
 
     @classmethod
     def for_user(cls, user: User) -> MeOut:
@@ -140,6 +145,7 @@ class MeOut(UserOut):
         return cls(
             **UserOut.model_validate(user).model_dump(),
             capabilities=Capabilities.for_user(user),
+            ics_token=user.ics_token,
         )
 
 
@@ -243,6 +249,59 @@ class ScheduleOut(BaseModel):
     monday_date: dt.date
     status: WeekStatus
     assignments: list[ScheduleAssignmentOut]
+
+
+class SwapCreateIn(BaseModel):
+    """`POST /swaps` body (§7). The caller is `from_user`; the three ids name the
+    target worker and the two locked assignment rows to exchange (§4)."""
+
+    to_user: int
+    from_assignment: int
+    to_assignment: int
+
+
+class SwapAssignmentOut(BaseModel):
+    """One side of a swap as echoed on `SwapRequestOut` — the assignment row's
+    identity and its (day, slot, role) shape, plus its CURRENT holder. Never a
+    user object, so nothing here can grow an `is_root` (§5)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    day: Day
+    slot: AssignmentSlot
+    role: AssignmentRole
+    user_id: int
+
+
+class SwapRequestOut(BaseModel):
+    """A §6 swap_request as either party sees it (§7 `GET /swaps`). Echoes the
+    week by its Monday date (the §6 natural key) and both assignment rows nested,
+    so the frontend renders the trade without a second lookup."""
+
+    id: int
+    week: dt.date
+    from_user: int
+    to_user: int
+    from_assignment: SwapAssignmentOut
+    to_assignment: SwapAssignmentOut
+    status: SwapStatus
+    created_at: dt.datetime
+    resolved_at: dt.datetime | None
+
+    @classmethod
+    def from_model(cls, swap: SwapRequest) -> SwapRequestOut:
+        return cls(
+            id=swap.id,
+            week=swap.week.monday_date,
+            from_user=swap.from_user,
+            to_user=swap.to_user,
+            from_assignment=SwapAssignmentOut.model_validate(swap.requester_assignment),
+            to_assignment=SwapAssignmentOut.model_validate(swap.target_assignment),
+            status=swap.status,
+            created_at=swap.created_at,
+            resolved_at=swap.resolved_at,
+        )
 
 
 class ConflictItemOut(BaseModel):

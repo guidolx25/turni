@@ -61,6 +61,26 @@ def build_roster(db: DbSession) -> tuple[WorkerRef, ...]:
     )
 
 
+def accepted_sacrifice_grants(db: DbSession, week: Week) -> dict[int, Day]:
+    """§2.1 H3 / §2.3 (v1.6): the week's grant of record — one granted free day
+    per worker with an ACCEPTED `sacrifice_proposals` row.
+
+    The single reader of that rule: every solve (`build_solver_input`) and every
+    post-lock H3 re-check (§4 swap validation, `app.swap_service`) resolves the
+    extended free-day domain through this helper, so "what days may this worker
+    be free" cannot fork between the solver and the swap validator.
+    """
+    return {
+        p.user_id: p.proposed_free_day
+        for p in db.scalars(
+            select(SacrificeProposal).where(
+                SacrificeProposal.week_id == week.id,
+                SacrificeProposal.status == SacrificeStatus.ACCEPTED,
+            )
+        ).all()
+    }
+
+
 def build_solver_input(
     db: DbSession,
     week: Week,
@@ -89,15 +109,7 @@ def build_solver_input(
         for c in db.scalars(select(Constraint).where(Constraint.week_id == week.id)).all()
     )
     # §2.1 H3 / §2.3: accepted proposal rows ARE grants — the grant of record.
-    grants: dict[int, Day] = {
-        p.user_id: p.proposed_free_day
-        for p in db.scalars(
-            select(SacrificeProposal).where(
-                SacrificeProposal.week_id == week.id,
-                SacrificeProposal.status == SacrificeStatus.ACCEPTED,
-            )
-        ).all()
-    }
+    grants: dict[int, Day] = accepted_sacrifice_grants(db, week)
     grants.update(sacrifice_grants or {})
     return SolverInput(
         week_monday=week.monday_date,
