@@ -268,6 +268,15 @@ class SacrificeProposal(Base):
     conflict: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, nullable=False, default=utcnow)
 
+    __table_args__ = (
+        # §6 (v1.6): one proposal per (week, worker). Safe by construction —
+        # Friday is the only reachable sacrifice day (§2.3 corollary), so one
+        # worker can never legitimately hold two proposals in a week — and
+        # load-bearing: the ACCEPTED row is the grant of record (§2.1 H3), so a
+        # second row for the same worker could silently widen the H3 domain twice.
+        UniqueConstraint("week_id", "user_id"),
+    )
+
     week: Mapped[Week] = relationship()
     user: Mapped[User] = relationship()
 

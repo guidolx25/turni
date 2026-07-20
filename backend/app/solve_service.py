@@ -21,8 +21,8 @@ from sqlalchemy.orm import Session as DbSession
 
 from app import audit
 from app.db import utcnow
-from app.enums import AssignmentSource, Day, UserRole, WeekStatus
-from app.models import Assignment, Constraint, SolverState, User, Week
+from app.enums import AssignmentSource, Day, SacrificeStatus, UserRole, WeekStatus
+from app.models import Assignment, Constraint, SacrificeProposal, SolverState, User, Week
 from app.solver import (
     PersonalConstraint,
     PriorSlot,
@@ -70,22 +70,41 @@ def build_solver_input(
 ) -> SolverInput:
     """Assemble the pure `SolverInput` for `week` from §6 rows.
 
-    Both `free_day_pins` and `sacrifice_grants` are EMPTY for a normal solve — so a
-    normal solve's H3 domains are exactly Mon–Thu. The §2.3 flow passes both: the
-    grant widens the worker's free-day domain to the conflicted day (H3), and the
-    pin forces the free day onto it. The grant is what makes such a pin legal, so
-    the two travel together on the probe and on the accepted re-solve.
+    Sacrifice grants (§2.1 H3) reach the model from TWO sources, merged here:
+
+    - **The grant of record (v1.6):** every ACCEPTED `sacrifice_proposals` row for
+      this week. Reading them HERE — not at any single call site — is what makes
+      the grant durable: every solve of the week (cron, manual, regenerate, the
+      accept re-solve itself) carries it, so an accepted week can never relapse
+      into INFEASIBLE because a call-scoped grant evaporated.
+    - **The explicit `sacrifice_grants` argument:** the §2.3 probe, whose proposal
+      does not exist yet. It merges on top (no legitimate key collision: probes
+      target only workers with no answered proposal).
+
+    `free_day_pins` and the explicit grants are EMPTY for a normal solve; on a
+    week with no accepted proposal the H3 domains are then exactly Mon–Thu.
     """
     constraints = tuple(
         PersonalConstraint(worker_id=c.user_id, day=c.day, slot=c.slot, kind=c.kind)
         for c in db.scalars(select(Constraint).where(Constraint.week_id == week.id)).all()
     )
+    # §2.1 H3 / §2.3: accepted proposal rows ARE grants — the grant of record.
+    grants: dict[int, Day] = {
+        p.user_id: p.proposed_free_day
+        for p in db.scalars(
+            select(SacrificeProposal).where(
+                SacrificeProposal.week_id == week.id,
+                SacrificeProposal.status == SacrificeStatus.ACCEPTED,
+            )
+        ).all()
+    }
+    grants.update(sacrifice_grants or {})
     return SolverInput(
         week_monday=week.monday_date,
         roster=roster,
         constraints=constraints,
         free_day_pins=free_day_pins or {},
-        sacrifice_grants=sacrifice_grants or {},
+        sacrifice_grants=grants,
         prior_state=_load_prior_state(db),
         # §2.2 S2c: the rest-spread F-pair derived structurally from THIS week's H5
         # template, so the term fires on a first-ever week too (empty prior_state).
@@ -99,7 +118,6 @@ def run_solve(
     week: Week,
     free_day_pins: Mapping[int, Day] | None = None,
     actor: User | None = None,
-    sacrifice_grants: Mapping[int, Day] | None = None,
 ) -> SolverResult:
     """Solve `week` and persist the outcome (§3.2, §8).
 
@@ -121,9 +139,10 @@ def run_solve(
     window that closed.
     """
     roster = build_roster(db)
-    # §2.3: the accept path passes the grant alongside the pin — the grant is what
-    # makes the pinned day a legal H3 free day. Both empty on a normal solve.
-    result = solve(build_solver_input(db, week, roster, free_day_pins, sacrifice_grants))
+    # §2.3 (v1.6): grants are NOT a parameter here — build_solver_input reads the
+    # week's grant of record (accepted proposals) itself, so every solve path
+    # (cron, manual, accept) carries them without any caller remembering to.
+    result = solve(build_solver_input(db, week, roster, free_day_pins))
 
     if result.status is SolverStatus.INFEASIBLE:
         # The week is parked on an unresolved conflict: drop any schedule an earlier

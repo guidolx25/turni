@@ -732,12 +732,9 @@ def test_decline_then_resolve_does_not_re_offer_declined_worker(
 def test_accepted_then_infeasible_resolve_does_not_re_offer_accepted_worker(
     client: TestClient, session: DbSession
 ) -> None:
-    """§2.3: the probe skips anyone who ALREADY ANSWERED — ACCEPTED as well as
-    DECLINED. The grant is call-scoped and never persisted, so an accept whose
-    re-solve came back INFEASIBLE leaves the week SOLVED with the row still
-    ACCEPTED; the next `/admin/solve` carries no grant and is infeasible again.
-    Without the ACCEPTED half of the exclusion the same worker would be offered the
-    same day a second time, with a duplicate `sacrifice_proposed` notice.
+    """§2.3/v1.6: an accepted row is the PERSISTED grant of record, so a still-
+    infeasible re-solve implicates a DIFFERENT core — and the probe must not
+    re-offer the accepted worker, whose conflict is structurally solved already.
 
     Reaching that state needs a competing edit landing BETWEEN the probe and the
     accept re-solve, which is exactly the race `accept_sacrifice` documents ("a
@@ -770,16 +767,11 @@ def test_accepted_then_infeasible_resolve_does_not_re_offer_accepted_worker(
     assert session.scalars(select(Assignment).where(Assignment.week_id == week.id)).all() == []
     assert _pasha_proposed_notices(session, roster) == 1
 
-    # The competing edit is withdrawn (it was transient), so the week is back to the
-    # exact conflict whose Friday probe SUCCEEDED. Nothing but the `answered`
-    # exclusion now stands between Pasha and a duplicate offer.
-    session.execute(
-        delete(Constraint).where(
-            Constraint.week_id == week.id, Constraint.user_id == roster["mattia"].id
-        )
-    )
-    session.commit()
-
+    # Re-solve with the competing conflict still in place. v1.6: Pasha's grant of
+    # record IS carried (his own conflict is absorbed), yet the week stays
+    # INFEASIBLE on the jolly's Friday request — a DIFFERENT core. The probe must
+    # not re-offer Pasha (ACCEPTED exclusion), and the jolly is not a core worker,
+    # so no proposal exists at all: the week escalates.
     login(client, "mattia")
     resp = _solve(client, monday)
     assert resp.status_code == 200, resp.text  # ACCEPTED is not PENDING → guard lets it run
@@ -797,6 +789,59 @@ def test_accepted_then_infeasible_resolve_does_not_re_offer_accepted_worker(
     assert session.scalars(
         select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
     ).all(), "§2.3 step 4: nothing is resolved silently"
+
+
+def test_accepted_grant_of_record_survives_a_later_resolve(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.1 H3 / v1.6: the grant of record makes an accepted-then-infeasible week
+    RECOVERABLE by re-solve. Same race as above — but once the competing edit is
+    withdrawn, a plain `/admin/solve` (no pin, no argument-passed grant) reads the
+    accepted row and is FEASIBLE, with Pasha's free day exactly where the grant
+    puts it: Friday. Pre-v1.6 this relapsed into INFEASIBLE because the grant
+    evaporated with the accept call — the unrecoverability the Phase 3 review
+    recorded, now closed."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    proposal = _open_real_friday_proposal(client, session, roster, monday)
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None
+
+    _hard(session, roster["mattia"].id, week, Day.FRI)  # the competing edit
+    login(client, "pasha")
+    assert client.post(f"/sacrifice/{proposal.id}/accept").status_code == 200  # infeasible accept
+
+    # The competing edit is withdrawn (it was transient): the week is back to the
+    # exact conflict Pasha's accepted grant resolves.
+    session.execute(
+        delete(Constraint).where(
+            Constraint.week_id == week.id, Constraint.user_id == roster["mattia"].id
+        )
+    )
+    session.commit()
+
+    login(client, "mattia")
+    resp = _solve(client, monday)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] in ("optimal", "feasible"), (
+        "v1.6: the persisted grant must carry into a plain re-solve"
+    )
+
+    session.expire_all()
+    # H7 held and H3 was granted: Pasha works zero Friday slots — his free day
+    # landed on the granted Friday without any pin on this solve.
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    fri_rows = session.scalars(
+        select(Assignment).where(
+            Assignment.week_id == week.id,
+            Assignment.day == Day.FRI,
+            Assignment.user_id == roster["pasha"].id,
+        )
+    ).all()
+    assert fri_rows == [], "the granted Friday free day must hold on a plain re-solve"
+    # And the week now publishes — the admin path out of the race is a re-solve,
+    # not an override.
+    assert client.post("/admin/publish", params={"week": monday.isoformat()}).status_code == 200
 
 
 # --- degenerate roster: no visible admin to escalate TO ----------------------

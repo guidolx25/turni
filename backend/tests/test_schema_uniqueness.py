@@ -16,6 +16,7 @@ from tests.helpers import (
     FIXED_TS,
     make_assignment,
     make_constraint,
+    make_sacrifice_proposal,
     make_user,
     make_week,
 )
@@ -196,6 +197,30 @@ def test_foreign_keys_are_enforced_on_the_app_engine() -> None:
 
     with engine.connect() as conn:
         assert conn.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
+
+
+def test_sacrifice_proposal_week_worker_is_unique(connection: Connection) -> None:
+    """§6 (v1.6) sacrifice_proposals UNIQUE(week_id, user_id): the ACCEPTED row is
+    the §2.1 H3 grant of record, so a second row for the same worker in the same
+    week — whatever its status or day — must be refused by the database itself."""
+    user_id = make_user(connection)
+    week_id = make_week(connection)
+    make_sacrifice_proposal(connection, user_id=user_id, week_id=week_id)
+    with pytest.raises(IntegrityError):
+        make_sacrifice_proposal(
+            connection, user_id=user_id, week_id=week_id, proposed_free_day="thu", status="declined"
+        )
+
+
+def test_sacrifice_proposal_key_is_per_week_and_per_worker(connection: Connection) -> None:
+    """Control: a different week or a different worker is a distinct row."""
+    user_id = make_user(connection)
+    other_user = make_user(connection, username="worker2")
+    week_id = make_week(connection)
+    other_week = make_week(connection, monday_date="2026-07-27")
+    make_sacrifice_proposal(connection, user_id=user_id, week_id=week_id)
+    make_sacrifice_proposal(connection, user_id=other_user, week_id=week_id)
+    make_sacrifice_proposal(connection, user_id=user_id, week_id=other_week)
 
 
 def test_assignment_requires_an_existing_user(connection: Connection) -> None:

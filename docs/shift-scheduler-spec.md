@@ -1,8 +1,11 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.5 (2026-07-21) · **Status:** Approved for build
+**Version:** 1.6 (2026-07-21) · **Status:** Approved for build
 **v1.5:** §6 `sacrifice_proposals.conflict_note` (prose) → `conflict` (structured
 §8 unsat core, `[{worker_id, day, slot}]`), so conflicts localize at render time (§9).
+**v1.6:** the accepted `sacrifice_proposals` row is the §2.1 H3 **grant of record** —
+every solve of a week carries the grants from its accepted proposals; §6 adds
+`UNIQUE(week_id, user_id)` on `sacrifice_proposals`.
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -32,6 +35,8 @@ A bilingual (IT/EN) web platform that schedules weekly shifts for a beach establ
 - **H3 — Free day:** each core worker (Matteo, Francesco, Pasha, Amir) has exactly **one** free day per week, restricted to **Mon–Thu**. On the free day they work zero slots.
 
   **Sacrifice grant (§2.3).** The Mon–Thu restriction is the *default* domain, not the whole rule. The domain is parameterized by an optional per-worker **sacrifice grant**: for a worker holding a grant for day `g`, the free-day domain is **Mon–Thu ∪ {g}**. A grant is issued only by the §2.3 sacrifice flow, only for the day named in the blocking hard constraint, and only for the week in question — never by a normal solve, where every domain is exactly Mon–Thu. Exactly one free day still holds (H3's cardinality is untouched); the grant widens *where* it may fall, and nothing else.
+
+  **Grant of record (v1.6).** An accepted grant is durable for its week: the accepted §6 `sacrifice_proposals` row *is* the grant of record, and **every** solve of that week — cron, manual, regenerate, the accept re-solve itself — reads the week's accepted proposals and carries their grants. A grant never evaporates with the call that created it, so an accepted week cannot relapse into INFEASIBLE for the conflict it already resolved; a later infeasibility implicates a *different* core and iterates the §2.3 flow toward a different worker.
 - **H4 — One slot per working day:** on non-free weekdays (Mon–Fri), each core worker works exactly one slot (AM xor PM).
 - **H5 — Weekend template (fixed, never solved):**
   - Saturday: Matteo AM, Francesco PM (bagnini); Pasha and Amir full-day.
@@ -155,11 +160,16 @@ swap_requests(id, week_id, from_user, to_user, from_assignment, to_assignment,
               created_at, resolved_at)
 
 sacrifice_proposals(id, week_id, user_id, proposed_free_day,
-                    status ENUM(pending,accepted,declined), conflict JSON, created_at)
+                    status ENUM(pending,accepted,declined), conflict JSON, created_at,
+                    UNIQUE(week_id, user_id))
                     -- conflict: the §8 minimal unsat core as data — a list of
                     -- {worker_id, day, slot} items for the blocking hard
                     -- requests. Rendered in the viewer's language by the §9
                     -- dictionaries; never stored as a pre-formatted sentence.
+                    -- UNIQUE(week_id, user_id) (v1.6): one proposal per worker
+                    -- per week — safe by construction (§2.3: Friday is the only
+                    -- reachable sacrifice day) and load-bearing, because the
+                    -- ACCEPTED row is the §2.1 H3 grant of record.
 
 notifications(id, user_id, event_type, payload JSON, read BOOL, created_at)
 

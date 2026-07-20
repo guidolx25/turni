@@ -79,13 +79,14 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
     conflict = _blocking_core(result.blocking_constraints)
     # §2.3: a proposal must never loop back to someone who already answered it for
     # THIS week — whatever the answer, and even for a different day (conservative
-    # per-worker exclusion). DECLINED is the obvious case. ACCEPTED matters too: the
-    # grant is call-scoped, so if an accepted re-solve came back INFEASIBLE the week
-    # is left SOLVED with the row still ACCEPTED, and the next solve carries no grant
-    # and is deterministically INFEASIBLE again — without this the same worker would
-    # be re-offered the same day, with a duplicate `sacrifice_proposed` notice.
-    # With both out of the probe set, a re-solve either proposes to a different
-    # not-yet-asked worker whose move helps, or falls through to _escalate below.
+    # per-worker exclusion). DECLINED is the obvious case. ACCEPTED is a logic
+    # error made impossible: an accepted row is the persisted GRANT OF RECORD
+    # (v1.6), carried by every subsequent solve, so that worker's conflict is
+    # already structurally solved — if the week is STILL infeasible it is
+    # infeasible for a DIFFERENT core, and the fix is proposing to a different
+    # not-yet-asked worker (the normal iterative case) or falling through to
+    # _escalate below, never re-offering this one. The §6 (week_id, user_id)
+    # unique key backs the same rule at the schema level.
     answered = set(
         db.scalars(
             select(SacrificeProposal.user_id).where(
@@ -145,10 +146,12 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
 def accept_sacrifice(db: DbSession, proposal: SacrificeProposal, actor: User) -> SacrificeProposal:
     """§2.3 step 3 (accept): re-solve with the free day granted AND pinned, then publish.
 
-    The pin forces the free day onto the offered day; the grant (H3) is what makes
-    that day part of the worker's domain in the first place, so the two must travel
-    together — a pin without its grant would be silently dropped by the model and
-    the re-solve would not reproduce the probe.
+    Marking the row ACCEPTED is what issues the grant: the accepted proposal is
+    the GRANT OF RECORD (§2.1 H3, v1.6), read by `build_solver_input` on this
+    re-solve and on every later solve of the week — the flip precedes `run_solve`
+    below so the very solve that answers the acceptance already reads it from the
+    row, not from a call-scoped argument. The pin forces the free day onto the
+    offered day for THIS re-solve, reproducing the probe exactly.
 
     The worker's hard request is untouched: it is still enforced as an H7 assumption
     on this re-solve (§2.3 — the trade is the free-day placement, never the request).
@@ -157,13 +160,17 @@ def accept_sacrifice(db: DbSession, proposal: SacrificeProposal, actor: User) ->
     is kept honest: it never publishes an unsolvable week — it escalates instead."""
     _require_pending(proposal)
     proposal.status = SacrificeStatus.ACCEPTED
+    # The session runs autoflush=False, so make the grant of record visible to
+    # build_solver_input's accepted-proposals read BEFORE the re-solve — without
+    # this the flip sits unflushed and the very solve that answers the acceptance
+    # would miss its own grant.
+    db.flush()
     week = proposal.week
     result = run_solve(
         db,
         week,
         free_day_pins={proposal.user_id: proposal.proposed_free_day},
         actor=actor,
-        sacrifice_grants={proposal.user_id: proposal.proposed_free_day},
     )
     audit.record(
         db,

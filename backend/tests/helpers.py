@@ -67,6 +67,21 @@ def make_constraint(connection: Connection, *, user_id: int, week_id: int, **ove
     return insert(connection, "constraints", **row)
 
 
+def make_sacrifice_proposal(
+    connection: Connection, *, user_id: int, week_id: int, **overrides: Any
+) -> int:
+    row: dict[str, Any] = {
+        "week_id": week_id,
+        "user_id": user_id,
+        "proposed_free_day": "fri",
+        "status": "pending",
+        "conflict": None,
+        "created_at": FIXED_TS,
+    }
+    row.update(overrides)
+    return insert(connection, "sacrifice_proposals", **row)
+
+
 def make_assignment(connection: Connection, *, user_id: int, week_id: int, **overrides: Any) -> int:
     row: dict[str, Any] = {
         "week_id": week_id,
