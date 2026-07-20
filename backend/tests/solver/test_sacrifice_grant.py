@@ -82,7 +82,9 @@ def test_h3_friday_grant_extends_the_domain_to_mon_thu_plus_friday() -> None:
 
 def test_h3_grant_for_a_mon_thu_day_is_a_no_op() -> None:
     """§2.3 corollary: Mon–Thu is already in the default domain, so a grant there
-    widens nothing — such conflicts are self-placing via H4 and escalate."""
+    widens nothing. The probe then reduces to the plain solve plus a pin, whose
+    feasible region is a subset, so an INFEASIBLE week stays INFEASIBLE and the
+    conflict escalates instead of producing a proposal."""
     for day in FREE_DAYS:
         assert free_day_domain(PASHA, {PASHA: day}) == FREE_DAYS
 

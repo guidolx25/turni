@@ -49,8 +49,11 @@ def free_day_domain(worker_id: int, sacrifice_grants: Mapping[int, Day]) -> tupl
 
     Two days are deliberately not extendable, matching the §2.3 corollary:
 
-    - A grant for a day already in ``FREE_DAYS`` is a no-op (nothing to widen) —
-      such a conflict is self-placing and needs no grant.
+    - A grant for a day already in ``FREE_DAYS`` is a no-op (nothing to widen), so
+      the probe reduces to the plain solve plus a pin. A pin only ADDS
+      ``free[u][d] = 1``, so that probe's feasible region is a subset and an
+      INFEASIBLE week stays INFEASIBLE — for slot-level and full-day requests
+      alike. Such a conflict escalates rather than producing a proposal.
     - A grant for Sat/Sun is REFUSED. H5 makes the weekend a fixed template with
       no solver variables, so a weekend free var would satisfy H3's cardinality
       without freeing any weekday — the worker would work all five weekdays and

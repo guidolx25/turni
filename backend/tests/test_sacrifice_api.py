@@ -13,9 +13,10 @@ Two distinct lifecycle endings are covered:
 H3 note (§2.1, v1.4): a core worker's free day defaults to Mon–Thu, and the §2.3
 flow may issue that ONE worker a **sacrifice grant** widening their domain to
 `Mon–Thu ∪ {day}`. Per the §2.3 corollary, Friday is the only day where a grant
-changes anything — Mon–Thu self-place through H4, Sat/Sun escalate at submission
-under H5. So a hard Friday request opens a proposal **iff** the Friday-extended
-probe is feasible, and escalates otherwise. Both branches are covered here:
+changes anything — a Mon–Thu grant is a no-op, so that probe is the plain solve
+plus a pin and stays INFEASIBLE; Sat/Sun escalate at submission under H5. So a
+hard Friday request opens a proposal **iff** the Friday-extended probe is
+feasible, and escalates otherwise. Both branches are covered here:
 
 * `test_h3_hard_friday_request_opens_a_friday_free_day_proposal` — probe feasible.
 * `test_h3_friday_conflict_with_infeasible_probe_escalates` — probe infeasible.

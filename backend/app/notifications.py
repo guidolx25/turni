@@ -35,8 +35,9 @@ EVENT_SACRIFICE_ESCALATED = "sacrifice_escalated"
 # on a weekend day has no variable to bind and cannot be honored by solving. §2.3
 # forbids resolving that silently, so submission escalates it to the admin, who
 # reconciles it against the template by hand.
-# NOTE: §10's event list does not name this event; it needs §10 reconciliation
-# (event_type is free text per §6, so no migration is required).
+# §10 enumerates this event and defines its audience (visible admins only) and its
+# firing rule: on creation of a hard weekend request, including a soft→hard change,
+# but never on re-submission of an already-hard row and never on deletion.
 EVENT_WEEKEND_HARD_ESCALATED = "weekend_hard_escalated"
 EVENT_ADMIN_OVERRIDE = "admin_override"
 
