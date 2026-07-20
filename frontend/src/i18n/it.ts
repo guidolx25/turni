@@ -108,6 +108,12 @@ export const it = {
   'errors.swap_weekend_bagnini_only': 'Nel weekend si scambiano solo i turni dei bagnini.',
   'errors.swap_already_resolved': 'Richiesta di scambio già decisa.',
   'errors.swap_wrong_target': 'Questa richiesta non è indirizzata a te.',
+  // Reachable whenever the schedule moves under an open page — a swap applied
+  // or an admin override since it loaded (§4 re-validates at acceptance).
+  'errors.swap_wrong_holder': 'Il turno è cambiato: ricarica la settimana e riprova.',
+  'errors.swap_assignment_not_found': 'Turno non trovato: ricarica la settimana.',
+  'errors.swap_week_mismatch': 'I due turni appartengono a settimane diverse.',
+  'errors.swap_self': 'Non puoi scambiare un turno con te stesso.',
 } as const
 
 export type TranslationKey = keyof typeof it

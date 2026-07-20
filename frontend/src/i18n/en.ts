@@ -108,4 +108,10 @@ export const en = {
   'errors.swap_weekend_bagnini_only': 'On weekends only lifeguard shifts can be swapped.',
   'errors.swap_already_resolved': 'Swap request already resolved.',
   'errors.swap_wrong_target': 'This request is not addressed to you.',
+  // Reachable whenever the schedule moves under an open page — a swap applied
+  // or an admin override since it loaded (§4 re-validates at acceptance).
+  'errors.swap_wrong_holder': 'That shift has changed hands — reload the week and try again.',
+  'errors.swap_assignment_not_found': 'Shift not found — reload the week.',
+  'errors.swap_week_mismatch': 'The two shifts belong to different weeks.',
+  'errors.swap_self': 'You cannot swap a shift with yourself.',
 } satisfies Record<TranslationKey, string>
