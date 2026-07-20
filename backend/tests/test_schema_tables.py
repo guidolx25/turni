@@ -23,6 +23,7 @@ SPEC_TABLES: dict[str, set[str]] = {
         "email",
         "email_notifications",
         "language",
+        "ics_token",
         "active",
         "created_at",
     },

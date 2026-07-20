@@ -42,6 +42,7 @@ from app.enums import (
     UserRole,
     WeekStatus,
 )
+from app.security import new_ics_token
 
 
 class User(Base):
@@ -63,6 +64,15 @@ class User(Base):
     email_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     language: Mapped[Language] = mapped_column(
         enum_column(Language, "language"), nullable=False, default=Language.IT
+    )
+    # §7 /export/ics bearer credential (v1.7): per-user, random, opaque — the
+    # calendar-feed URL is the leakiest credential in the system (pasted into
+    # calendar apps, synced to family devices), so revocation must be per-user
+    # regeneration, never a SECRET_KEY rotation. Unique: the feed URL must
+    # resolve to exactly one user. NEVER serialized by any response model except
+    # to its own user.
+    ics_token: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False, default=new_ics_token
     )
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, nullable=False, default=utcnow)

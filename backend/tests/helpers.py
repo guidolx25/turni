@@ -9,6 +9,7 @@ pass for the wrong reason: the point is to prove the database itself refuses
 from __future__ import annotations
 
 import re
+import secrets
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -39,6 +40,9 @@ def make_user(connection: Connection, **overrides: Any) -> int:
         "email": None,
         "email_notifications": 1,
         "language": "it",
+        # Fresh per call: the column is UNIQUE, and these raw inserts bypass the
+        # ORM default that normally supplies it.
+        "ics_token": secrets.token_urlsafe(16),
         "active": 1,
         "created_at": FIXED_TS,
     }

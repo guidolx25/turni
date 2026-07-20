@@ -93,8 +93,8 @@ def test_utc_datetime_read_back_from_a_legacy_naive_row_is_utc(
     connection.execute(
         text(
             "INSERT INTO users (id, username, password_hash, display_name, role, is_admin,"
-            " is_root, email_notifications, language, active, created_at)"
-            " VALUES (1, 'matteo', 'h', 'Matteo', 'bagnino', 0, 0, 1, 'it', 1, :ts)"
+            " is_root, email_notifications, language, ics_token, active, created_at)"
+            " VALUES (1, 'matteo', 'h', 'Matteo', 'bagnino', 0, 0, 1, 'it', 'tok-utc', 1, :ts)"
         ),
         {"ts": FIXED_TS},
     )

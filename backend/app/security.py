@@ -61,6 +61,15 @@ def dummy_password_hash() -> str:
     return _hasher.hash(secrets.token_urlsafe(32))
 
 
+def new_ics_token() -> str:
+    """A fresh §7 `/export/ics` feed credential (§6 users.ics_token, v1.7).
+
+    Per-user, random, opaque — never derived from identity or SECRET_KEY, so one
+    leaked calendar URL is revoked by regenerating ONE user's token, never by a
+    key rotation that logs everybody out."""
+    return secrets.token_urlsafe(32)
+
+
 def _signature(value: str) -> str:
     digest = hmac.new(settings.secret_key.encode(), value.encode(), hashlib.sha256).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")

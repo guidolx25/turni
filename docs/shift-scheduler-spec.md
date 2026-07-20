@@ -1,11 +1,14 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.6 (2026-07-21) · **Status:** Approved for build
+**Version:** 1.7 (2026-07-21) · **Status:** Approved for build
 **v1.5:** §6 `sacrifice_proposals.conflict_note` (prose) → `conflict` (structured
 §8 unsat core, `[{worker_id, day, slot}]`), so conflicts localize at render time (§9).
 **v1.6:** the accepted `sacrifice_proposals` row is the §2.1 H3 **grant of record** —
 every solve of a week carries the grants from its accepted proposals; §6 adds
 `UNIQUE(week_id, user_id)` on `sacrifice_proposals`.
+**v1.7:** §6 `users` gains `ics_token UNIQUE` — the §7 `/export/ics` bearer
+credential: per-user, random, regenerable (revocation is per-user, never a
+SECRET_KEY rotation).
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -125,7 +128,11 @@ No public signup. Root seeds the accounts (5 workers + root; Matteo may be a sin
 ```
 users(id, username UNIQUE, password_hash, display_name, role ENUM(bagnino,spiaggino,jolly),
       is_admin BOOL, is_root BOOL, email, email_notifications BOOL,
-      language ENUM(it,en), active BOOL, created_at)
+      language ENUM(it,en), ics_token UNIQUE, active BOOL, created_at)
+      -- ics_token (v1.7): the §7 /export/ics bearer credential — per-user,
+      -- random, opaque, regenerable. Revoking a leaked feed URL is a per-user
+      -- regeneration, never a SECRET_KEY rotation. Never serialized to anyone
+      -- but its own user.
 
 sessions(id, user_id, created_at, expires_at)
       -- infrastructure, not domain: the server-side session store behind §7's
@@ -198,7 +205,10 @@ PATCH  /me/settings           (language, email_notifications, password change)
 
 GET    /weeks                 (statuses, deadlines)
 GET    /schedule?week=        (assignments incl. weekend template)
-GET    /export/ics            (per-user calendar feed, token-authenticated URL)
+GET    /export/ics            (per-user calendar feed; authenticated by the
+                               users.ics_token bearer credential (v1.7), compared
+                               in constant time — never by session cookie, so
+                               calendar apps can poll it)
 
 GET    /constraints?week=     POST /constraints           DELETE /constraints/{id}
        (multi-week: any week with status=open)
