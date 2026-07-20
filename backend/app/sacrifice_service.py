@@ -73,16 +73,20 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
     # path — the proposal's conflict_note (so decline/accept-infeasible forward it)
     # and the immediate escalation below — so the admin always has the minimal core.
     conflict_note = _blocking_note(by_id, result.blocking_constraints)
-    # §2.3: a decline escalates and must never loop back — a worker who already
-    # declined a proposal for THIS week is not re-offered, even for a different day
-    # (conservative per-worker exclusion). With them out of the probe set, a
-    # re-solve after a decline either proposes to a different not-yet-declined
-    # worker whose move helps, or falls through to _escalate below.
-    declined = set(
+    # §2.3: a proposal must never loop back to someone who already answered it for
+    # THIS week — whatever the answer, and even for a different day (conservative
+    # per-worker exclusion). DECLINED is the obvious case. ACCEPTED matters too: the
+    # grant is call-scoped, so if an accepted re-solve came back INFEASIBLE the week
+    # is left SOLVED with the row still ACCEPTED, and the next solve carries no grant
+    # and is deterministically INFEASIBLE again — without this the same worker would
+    # be re-offered the same day, with a duplicate `sacrifice_proposed` notice.
+    # With both out of the probe set, a re-solve either proposes to a different
+    # not-yet-asked worker whose move helps, or falls through to _escalate below.
+    answered = set(
         db.scalars(
             select(SacrificeProposal.user_id).where(
                 SacrificeProposal.week_id == week.id,
-                SacrificeProposal.status == SacrificeStatus.DECLINED,
+                SacrificeProposal.status.in_((SacrificeStatus.DECLINED, SacrificeStatus.ACCEPTED)),
             )
         )
     )
@@ -90,8 +94,10 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
     # make it a legal free day — the GENERAL rule, `day ∈ SOLVER_DAYS` (Mon–Fri),
     # since that is exactly what `free_day_domain` will extend to. The §2.3
     # corollary then falls out rather than being special-cased:
-    #   - Mon–Thu are already in the default domain (the grant is a no-op) and are
-    #     self-placing, so a probe there only re-confirms the plain solve;
+    #   - Mon–Thu are already in the default domain, so the grant is a no-op and the
+    #     probe reduces to the plain solve plus a pin. A pin only ADDS free[u][d]=1,
+    #     so the probe's feasible region is a subset: an INFEASIBLE week stays
+    #     INFEASIBLE. Holds for slot-level and full-day requests alike;
     #   - Friday is the one day H4 forces worked that the grant can free — the only
     #     day where extending the domain changes the outcome;
     #   - Sat/Sun have no solver variables at all (H5 template), so they are not in
@@ -104,7 +110,7 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
             if by_id.get(c.worker_id) is not None
             and by_id[c.worker_id].is_core
             and c.day in SOLVER_DAYS
-            and c.worker_id not in declined
+            and c.worker_id not in answered
         },
         key=lambda pair: (pair[0], _DAY_INDEX[pair[1]]),
     )

@@ -310,7 +310,9 @@ def test_full_week_friday_conflict_with_infeasible_probe_ends_in_admin_escalatio
     assert solve.json()["status"] == "infeasible"
     assert solve.json()["blocking_constraints"], "§8: the core must name the conflict"
 
-    # No proposal — and in particular none offering the illegal Friday free day.
+    # No proposal at all: the Friday-extended probe failed, so the branch never
+    # fired. (A Friday free day is LEGAL under a §2.3 grant, v1.4 — what is absent
+    # here is the offer, not an "illegal" day.)
     assert session.scalars(select(SacrificeProposal)).all() == []
 
     # The visible admin holds the conflict, with the explanation; root does not.

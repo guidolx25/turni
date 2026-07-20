@@ -29,6 +29,14 @@ so the state-machine tests below (authorization, one-shot transitions, audit row
 re-solve guards) can exercise the accept/decline machinery on a plain feasible
 week, independent of what made a proposal open. It is DOWNSTREAM coverage only —
 the propose branch itself is reachable through `/admin/solve` and is proven there.
+
+It is therefore NOT admissible for anything whose subject is `open_sacrifice`
+itself (which workers enter the probe set, which day is offered, whether a probe
+fires): on a week with no hard constraints the solve is FEASIBLE, `open_sacrifice`
+is never called, and such a test would pass vacuously. Every test below whose
+subject is probe/propose BEHAVIOUR drives a real INFEASIBLE `/admin/solve` from a
+hard full-day FRIDAY request — the one shape that reaches the propose branch
+(§2.3 corollary).
 """
 
 from __future__ import annotations
@@ -36,7 +44,7 @@ from __future__ import annotations
 import datetime as dt
 
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session as DbSession
 
 from app.audit import ACTION_SACRIFICE
@@ -52,7 +60,7 @@ from app.routers.admin import ERROR_SACRIFICE_PENDING
 from app.sacrifice_service import _create_proposal
 from app.scheduling import get_or_create_week
 from app.solve_service import run_solve
-from app.solver import FREE_DAYS
+from app.solver import SOLVER_DAYS
 from tests.factories import PASSWORD, create_full_roster
 
 
@@ -96,8 +104,16 @@ def _force_proposal(
     solve → probe → proposal) is covered from `/admin/solve` in
     `test_h3_hard_friday_request_opens_a_friday_free_day_proposal` and end-to-end
     in `tests/test_full_week_simulation.py`.
+
+    Fixture guardrail only. Under v1.4 a proposal may offer any day a §2.3 grant
+    can reach — `Mon–Fri` (SOLVER_DAYS), Sat/Sun having no solver variables at all
+    (H5) — and in production Friday is the ONLY day the propose branch actually
+    reaches (§2.3 corollary). The Mon–Thu day seeded here is a deliberate synthetic
+    choice: it keeps these downstream tests' accept re-solve independent of the
+    grant mechanics they are not about. Which day is *reachable* is proven on a
+    real solve in `test_h3_hard_friday_request_opens_a_friday_free_day_proposal`.
     """
-    assert day in FREE_DAYS, "a proposal may only ever offer a Mon–Thu free day (H3)"
+    assert day in SOLVER_DAYS, "no proposal can ever offer a weekend day (H5: no variables)"
     week = get_or_create_week(session, monday)
     run_solve(session, week)  # feasible → OPEN→SOLVED, unpublished
     target = roster[worker]
@@ -369,14 +385,19 @@ def test_no_move_escalation_carries_minimal_core(client: TestClient, session: Db
 def test_proposal_notifies_only_the_target_worker(client: TestClient, session: DbSession) -> None:
     """§2.3 step 2: opening a proposal addresses exactly ONE core worker — the row
     names them, they get the `sacrifice_proposed` notice carrying the proposal id,
-    and nobody else is notified. The offered day is a legal H3 free day."""
+    and nobody else is notified.
+
+    Downstream coverage of `_create_proposal`'s fan-out: the offered day is the one
+    the fixture seeded (Thursday here), NOT a claim about which day the propose
+    branch can reach — under v1.4 that is Friday, proven on a real INFEASIBLE solve
+    in `test_h3_hard_friday_request_opens_a_friday_free_day_proposal`."""
     roster = create_full_roster(session)
     monday = _future_monday()
     _week, proposal = _force_proposal(session, roster, monday, worker="pasha", day=Day.THU)
 
     assert proposal.user_id == roster["pasha"].id
     assert proposal.status is SacrificeStatus.PENDING
-    assert proposal.proposed_free_day in FREE_DAYS  # H3: never Friday or a weekend
+    assert proposal.proposed_free_day is Day.THU  # exactly the day the fixture seeded
 
     notes = session.scalars(
         select(Notification).where(Notification.event_type == EVENT_SACRIFICE_PROPOSED)
@@ -589,18 +610,68 @@ def test_pending_proposal_blocks_resolve_no_duplicate(
     assert week is not None and week.status is WeekStatus.SOLVED
 
 
+def _pasha_proposed_notices(session: DbSession, roster: dict) -> int:
+    return len(
+        session.scalars(
+            select(Notification).where(
+                Notification.user_id == roster["pasha"].id,
+                Notification.event_type == EVENT_SACRIFICE_PROPOSED,
+            )
+        ).all()
+    )
+
+
+def _open_real_friday_proposal(
+    client: TestClient, session: DbSession, roster: dict, monday: dt.date
+) -> SacrificeProposal:
+    """A GENUINELY infeasible week carrying the proposal `open_sacrifice` opened
+    for it: Pasha hard-off Friday → plain solve INFEASIBLE → Friday-extended probe
+    feasible → ONE PENDING proposal offering him Friday (§2.3 corollary).
+
+    Unlike `_force_proposal` this drives the real propose branch, so the exclusion
+    logic in `open_sacrifice` is actually on the path of whatever runs next.
+    """
+    week = get_or_create_week(session, monday)
+    _hard(session, roster["pasha"].id, week, Day.FRI)
+
+    login(client, "mattia")
+    resp = _solve(client, monday)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "infeasible", "the propose branch requires a REAL conflict"
+
+    session.expire_all()
+    proposals = session.scalars(select(SacrificeProposal)).all()
+    assert len(proposals) == 1, "precondition: the probe opened exactly one proposal"
+    proposal = proposals[0]
+    assert proposal.user_id == roster["pasha"].id
+    assert proposal.proposed_free_day is Day.FRI
+    assert proposal.status is SacrificeStatus.PENDING
+    assert _pasha_proposed_notices(session, roster) == 1
+    return proposal
+
+
 def test_decline_then_resolve_does_not_re_offer_declined_worker(
     client: TestClient, session: DbSession
 ) -> None:
-    """§2.3: a worker who declined is never re-offered by a later re-solve of the
-    same (frozen) conflict. Pasha declines → DECLINED, week SOLVED, escalated. A
-    fresh /admin/solve is allowed (SOLVED, no pending) and runs, but with Pasha
-    excluded from the probe set: zero new PENDING proposals to him and no new
-    sacrifice_proposed notice to him.
+    """§2.3: a worker who DECLINED is never re-offered by a later re-solve of the
+    same (frozen) conflict.
+
+    Driven by a real infeasibility, not a seeded proposal — the exclusion lives in
+    `open_sacrifice`, which only runs when a solve comes back INFEASIBLE. Pasha is
+    hard-off Friday, so the plain solve is infeasible and the Friday-extended probe
+    is feasible: he is offered Friday. He declines → DECLINED, week parked SOLVED,
+    admin escalated. A fresh `/admin/solve` is then allowed (SOLVED, nothing
+    pending) and is deterministically INFEASIBLE again on the identical
+    constraints — and his Friday probe would STILL succeed. The only thing keeping
+    him from being re-offered is the exclusion, so removing it makes this test fail
+    with a second PENDING proposal and a duplicate `sacrifice_proposed` notice.
+
+    With him out of the probe set, no other candidate remains (the core names only
+    his Friday request), so the re-solve falls through to a second escalation.
     """
     roster = create_full_roster(session)
     monday = _future_monday()
-    week, proposal = _force_proposal(session, roster, monday, worker="pasha", day=Day.THU)
+    proposal = _open_real_friday_proposal(client, session, roster, monday)
 
     login(client, "pasha")
     assert client.post(f"/sacrifice/{proposal.id}/decline").status_code == 200
@@ -608,22 +679,18 @@ def test_decline_then_resolve_does_not_re_offer_declined_worker(
     session.expire_all()
     week = session.scalar(select(Week).where(Week.monday_date == monday))
     assert week is not None and week.status is WeekStatus.SOLVED  # parked → re-solve allowed
-
-    def pasha_proposed_notices() -> int:
-        return len(
-            session.scalars(
-                select(Notification).where(
-                    Notification.user_id == roster["pasha"].id,
-                    Notification.event_type == EVENT_SACRIFICE_PROPOSED,
-                )
-            ).all()
-        )
-
-    before = pasha_proposed_notices()
+    escalations_before = len(
+        session.scalars(
+            select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
+        ).all()
+    )
 
     login(client, "mattia")
     resp = _solve(client, monday)
     assert resp.status_code == 200, resp.text  # SOLVED + no pending → guard lets it run
+    assert resp.json()["status"] == "infeasible", (
+        "the re-solve must really re-enter open_sacrifice, or this proves nothing"
+    )
 
     session.expire_all()
     # Key invariant: no NEW pending proposal addressed to the declined worker...
@@ -634,10 +701,88 @@ def test_decline_then_resolve_does_not_re_offer_declined_worker(
         )
     ).all()
     assert pasha_pending == []
-    # ...and no fresh sacrifice_proposed notice to him.
-    assert pasha_proposed_notices() == before
+    # ...no second proposal row of ANY status, and no fresh sacrifice_proposed notice.
+    assert len(session.scalars(select(SacrificeProposal)).all()) == 1
+    assert _pasha_proposed_notices(session, roster) == 1
     # His declined row is left as the record of the refusal, not rewritten.
     declined = session.scalars(
         select(SacrificeProposal).where(SacrificeProposal.status == SacrificeStatus.DECLINED)
     ).all()
     assert [p.user_id for p in declined] == [roster["pasha"].id]
+    # The conflict did not evaporate: with no candidate left it escalates again.
+    escalations_after = len(
+        session.scalars(
+            select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
+        ).all()
+    )
+    assert escalations_after > escalations_before, "an unresolved week must reach the admin"
+
+
+def test_accepted_then_infeasible_resolve_does_not_re_offer_accepted_worker(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.3: the probe skips anyone who ALREADY ANSWERED — ACCEPTED as well as
+    DECLINED. The grant is call-scoped and never persisted, so an accept whose
+    re-solve came back INFEASIBLE leaves the week SOLVED with the row still
+    ACCEPTED; the next `/admin/solve` carries no grant and is infeasible again.
+    Without the ACCEPTED half of the exclusion the same worker would be offered the
+    same day a second time, with a duplicate `sacrifice_proposed` notice.
+
+    Reaching that state needs a competing edit landing BETWEEN the probe and the
+    accept re-solve, which is exactly the race `accept_sacrifice` documents ("a
+    late edit or a competing solve"). It is not reachable through the public API:
+    once the solve has run the week is `solved`, so `/constraints` refuses every
+    write with `week_closed`. The out-of-band edit is therefore applied at the
+    service level, directly on §6 rows — the ACCEPTED state itself is NOT faked:
+    it is produced by a real `/sacrifice/{id}/accept` over a real infeasible
+    re-solve, and the final re-offer check is a real `/admin/solve`.
+    """
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    proposal = _open_real_friday_proposal(client, session, roster, monday)
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert week is not None
+
+    # The competing edit: the jolly goes hard-off Friday too, so granting Pasha a
+    # Friday free day now leaves Friday short a spiaggino (H1 vs H4) — the accept
+    # re-solve, unlike the probe that preceded it, is INFEASIBLE.
+    _hard(session, roster["mattia"].id, week, Day.FRI)
+
+    login(client, "pasha")
+    assert client.post(f"/sacrifice/{proposal.id}/accept").status_code == 200
+
+    session.expire_all()
+    proposal = session.get(SacrificeProposal, proposal.id)
+    week = session.scalar(select(Week).where(Week.monday_date == monday))
+    assert proposal.status is SacrificeStatus.ACCEPTED  # answered, and left ACCEPTED
+    assert week.status is WeekStatus.SOLVED, "an infeasible accept never publishes"
+    assert session.scalars(select(Assignment).where(Assignment.week_id == week.id)).all() == []
+    assert _pasha_proposed_notices(session, roster) == 1
+
+    # The competing edit is withdrawn (it was transient), so the week is back to the
+    # exact conflict whose Friday probe SUCCEEDED. Nothing but the `answered`
+    # exclusion now stands between Pasha and a duplicate offer.
+    session.execute(
+        delete(Constraint).where(
+            Constraint.week_id == week.id, Constraint.user_id == roster["mattia"].id
+        )
+    )
+    session.commit()
+
+    login(client, "mattia")
+    resp = _solve(client, monday)
+    assert resp.status_code == 200, resp.text  # ACCEPTED is not PENDING → guard lets it run
+    assert resp.json()["status"] == "infeasible"
+
+    session.expire_all()
+    # No second proposal to the worker who already answered, in any state...
+    pasha_proposals = session.scalars(
+        select(SacrificeProposal).where(SacrificeProposal.user_id == roster["pasha"].id)
+    ).all()
+    assert [p.status for p in pasha_proposals] == [SacrificeStatus.ACCEPTED]
+    # ...and, the point of the exclusion, no duplicate `sacrifice_proposed` notice.
+    assert _pasha_proposed_notices(session, roster) == 1
+    # The week is still unresolved, so it reaches the admin rather than going quiet.
+    assert session.scalars(
+        select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
+    ).all(), "§2.3 step 4: nothing is resolved silently"
