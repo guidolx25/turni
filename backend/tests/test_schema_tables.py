@@ -57,7 +57,7 @@ SPEC_TABLES: dict[str, set[str]] = {
         "user_id",
         "proposed_free_day",
         "status",
-        "conflict_note",
+        "conflict",
         "created_at",
     },
     "notifications": {"id", "user_id", "event_type", "payload", "read", "created_at"},

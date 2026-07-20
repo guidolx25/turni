@@ -124,7 +124,11 @@ def _parked_week_with_pending_proposal(session: DbSession, roster: dict):
     week = get_or_create_week(session, _TARGET_MONDAY)
     run_solve(session, week)
     proposal = _create_proposal(
-        session, week, roster["pasha"].id, Day.THU, conflict_note="Pasha thu full_day."
+        session,
+        week,
+        roster["pasha"].id,
+        Day.THU,
+        conflict=[{"worker_id": roster["pasha"].id, "day": "thu", "slot": "full_day"}],
     )
     return week, proposal
 

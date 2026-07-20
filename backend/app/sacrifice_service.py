@@ -52,7 +52,6 @@ from app.solver import (
     PersonalConstraint,
     SolverResult,
     SolverStatus,
-    WorkerRef,
     solve,
 )
 from app.visibility import admin_recipients
@@ -73,10 +72,11 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
     roster = build_roster(db)
     by_id = {w.id: w for w in roster}
     # §10: the enumerated unsat core (the conflicting hard requests, from the §8
-    # assumption literals) rendered readable. Computed once and carried on every
-    # path — the proposal's conflict_note (so decline/accept-infeasible forward it)
-    # and the immediate escalation below — so the admin always has the minimal core.
-    conflict_note = _blocking_note(by_id, result.blocking_constraints)
+    # assumption literals) as STRUCTURED DATA — {worker_id, day, slot} items the §9
+    # dictionaries render in the viewer's language. Computed once and carried on
+    # every path — the proposal's `conflict` (so decline/accept-infeasible forward
+    # it) and the immediate escalation below — so the admin always has the core.
+    conflict = _blocking_core(result.blocking_constraints)
     # §2.3: a proposal must never loop back to someone who already answered it for
     # THIS week — whatever the answer, and even for a different day (conservative
     # per-worker exclusion). DECLINED is the obvious case. ACCEPTED matters too: the
@@ -132,12 +132,12 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
             )
         )
         if probe.status is not SolverStatus.INFEASIBLE:
-            return _create_proposal(db, week, worker_id, day, conflict_note)
+            return _create_proposal(db, week, worker_id, day, conflict)
 
     # §2.3: no free-day move restores coverage — escalate to the admin WITH the
     # enumerated-core explanation. The blocking constraints are in hand here, so we
     # carry the core rather than discarding it.
-    _escalate(db, week, outcome="escalated", conflict_note=conflict_note)
+    _escalate(db, week, outcome="escalated", conflict=conflict)
     db.commit()
     return None
 
@@ -177,7 +177,7 @@ def accept_sacrifice(db: DbSession, proposal: SacrificeProposal, actor: User) ->
     if result.status is SolverStatus.INFEASIBLE:
         # State changed since the probe (a late edit or a competing solve): the
         # accepted pin no longer solves. Escalate WITH the conflict, never publish.
-        _escalate(db, week, outcome="escalated", conflict_note=proposal.conflict_note)
+        _escalate(db, week, outcome="escalated", conflict=proposal.conflict)
     else:
         publish_week(db, week, actor)
         notify(
@@ -207,26 +207,26 @@ def decline_sacrifice(db: DbSession, proposal: SacrificeProposal, actor: User) -
         {"transition": "decline"},
     )
     # §2.3: forward the conflict explanation the proposal was probed against.
-    _escalate(db, proposal.week, outcome="declined", conflict_note=proposal.conflict_note)
+    _escalate(db, proposal.week, outcome="declined", conflict=proposal.conflict)
     db.commit()
     return proposal
 
 
 def _create_proposal(
-    db: DbSession, week: Week, worker_id: int, day: Day, conflict_note: str
+    db: DbSession, week: Week, worker_id: int, day: Day, conflict: list[dict[str, object]]
 ) -> SacrificeProposal:
     # §10: store the enumerated unsat core (the conflicting hard requests) as the
-    # proposal's conflict_note, not an "offering {day}" blurb. decline_sacrifice
-    # and the accept-infeasible path forward proposal.conflict_note to the admin,
+    # proposal's `conflict`, not an "offering {day}" blurb. decline_sacrifice
+    # and the accept-infeasible path forward proposal.conflict to the admin,
     # so the minimal core reaches the escalation on every path. It also surfaces to
-    # the worker (SacrificeProposalOut.conflict_note) — a kept improvement, telling
+    # the worker (SacrificeProposalOut.conflict) — a kept improvement, telling
     # them *why* they were asked. The offered day already rides its own field.
     proposal = SacrificeProposal(
         week_id=week.id,
         user_id=worker_id,
         proposed_free_day=day,
         status=SacrificeStatus.PENDING,
-        conflict_note=conflict_note,
+        conflict=conflict,
     )
     db.add(proposal)
     db.flush()  # assign an id for the notification payload
@@ -252,27 +252,27 @@ def _create_proposal(
     return proposal
 
 
-def _blocking_note(by_id: dict[int, WorkerRef], blocking: tuple[PersonalConstraint, ...]) -> str:
-    """A human-readable summary of the hard requests that make the week INFEASIBLE,
-    for the §2.3 admin escalation. English for now — a tracked Phase 4/5 i18n
-    carry-forward, consistent with the existing `conflict_note` string."""
-    parts = [
-        f"{by_id[c.worker_id].display_name} {c.day.value} {c.slot.value}"
-        for c in blocking
-        if c.worker_id in by_id
+def _blocking_core(blocking: tuple[PersonalConstraint, ...]) -> list[dict[str, object]]:
+    """The §8 minimal unsat core as data for §6 `sacrifice_proposals.conflict`:
+    one {worker_id, day, slot} item per blocking hard request. No display names
+    and no prose — rendering (and localization) is the §9 dictionaries' job.
+    Closes the Phase 3 carry-forward that persisted a pre-formatted English
+    sentence the dictionaries could never retroactively localize."""
+    return [
+        {"worker_id": c.worker_id, "day": c.day.value, "slot": c.slot.value} for c in blocking
     ]
-    joined = ", ".join(parts) if parts else "unattributed hard requests"
-    return f"No feasible schedule honors the current hard requests; conflicting: {joined}."
 
 
-def _escalate(db: DbSession, week: Week, outcome: str, conflict_note: str | None) -> None:
+def _escalate(
+    db: DbSession, week: Week, outcome: str, conflict: list[dict[str, object]] | None
+) -> None:
     """§2.3/§10: hand an UNRESOLVED conflict to the admin WITH its explanation.
 
-    Uniform `{week, outcome, conflict_note}` payload across all three call sites
+    Uniform `{week, outcome, conflict}` payload across all three call sites
     (open_sacrifice-immediate, accept-infeasible, decline). The §10 minimal unsat
-    core is delivered as the enumerated conflicting hard requests within
-    `conflict_note` (the §8 assumption-literal core rendered readable) — no §6
-    column is added; §6 sacrifice_proposals is unchanged, only §10 was amended.
+    core is delivered as the enumerated conflicting hard requests in `conflict`
+    (the §8 assumption-literal core as {worker_id, day, slot} data, v1.5 —
+    localized at render time by the §9 dictionaries, never pre-formatted).
 
     Role-based fan-out → ONLY `admin_recipients(db)` receive it, and root is
     excluded there via `visible_users_stmt` (§5); NO worker-facing notification
@@ -284,7 +284,7 @@ def _escalate(db: DbSession, week: Week, outcome: str, conflict_note: str | None
     payload = {
         "week": week.monday_date.isoformat(),
         "outcome": outcome,
-        "conflict_note": conflict_note,
+        "conflict": conflict,
     }
     audit.record(
         db, None, audit.ACTION_SACRIFICE, "week", week.id, {"transition": "escalate", **payload}
@@ -300,7 +300,7 @@ def _escalate(db: DbSession, week: Week, outcome: str, conflict_note: str | None
             "in `solved` with no one notified. Conflict: %s",
             week.monday_date.isoformat(),
             outcome,
-            conflict_note,
+            conflict,
         )
         return
     for admin in recipients:

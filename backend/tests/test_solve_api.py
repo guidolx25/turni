@@ -424,7 +424,13 @@ def test_publish_refuses_pending_sacrifice_even_with_solver_rows_present(
     rows_before = _generated_snapshot(session, week.id)
     assert rows_before, "the precondition is a FEASIBLE week: solver rows are present"
 
-    _create_proposal(session, week, roster["pasha"].id, Day.THU, conflict_note="conflict")
+    _create_proposal(
+        session,
+        week,
+        roster["pasha"].id,
+        Day.THU,
+        conflict=[{"worker_id": roster["pasha"].id, "day": "thu", "slot": "full_day"}],
+    )
 
     login(client, "mattia")
     resp = client.post("/admin/publish", params={"week": monday.isoformat()})
@@ -448,7 +454,11 @@ def test_publish_allowed_once_the_pending_proposal_is_resolved(
     week = get_or_create_week(session, monday)
     assert run_solve(session, week).status.value in ("optimal", "feasible")
     proposal = _create_proposal(
-        session, week, roster["pasha"].id, Day.THU, conflict_note="conflict"
+        session,
+        week,
+        roster["pasha"].id,
+        Day.THU,
+        conflict=[{"worker_id": roster["pasha"].id, "day": "thu", "slot": "full_day"}],
     )
 
     login(client, "mattia")

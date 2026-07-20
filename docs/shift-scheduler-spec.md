@@ -1,6 +1,8 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.4 (2026-07-20) · **Status:** Approved for build
+**Version:** 1.5 (2026-07-21) · **Status:** Approved for build
+**v1.5:** §6 `sacrifice_proposals.conflict_note` (prose) → `conflict` (structured
+§8 unsat core, `[{worker_id, day, slot}]`), so conflicts localize at render time (§9).
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -153,7 +155,11 @@ swap_requests(id, week_id, from_user, to_user, from_assignment, to_assignment,
               created_at, resolved_at)
 
 sacrifice_proposals(id, week_id, user_id, proposed_free_day,
-                    status ENUM(pending,accepted,declined), conflict_note, created_at)
+                    status ENUM(pending,accepted,declined), conflict JSON, created_at)
+                    -- conflict: the §8 minimal unsat core as data — a list of
+                    -- {worker_id, day, slot} items for the blocking hard
+                    -- requests. Rendered in the viewer's language by the §9
+                    -- dictionaries; never stored as a pre-formatted sentence.
 
 notifications(id, user_id, event_type, payload JSON, read BOOL, created_at)
 

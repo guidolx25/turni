@@ -126,10 +126,7 @@ def _force_proposal(
         week,
         target.id,
         day,
-        conflict_note=(
-            "No feasible schedule honors the current hard requests; "
-            f"conflicting: {target.display_name} {day.value} full_day."
-        ),
+        conflict=[{"worker_id": target.id, "day": day.value, "slot": "full_day"}],
     )
     return week, proposal
 
@@ -179,7 +176,7 @@ def test_h3_hard_friday_request_opens_a_friday_free_day_proposal(
     assert proposal.proposed_free_day is Day.FRI, (
         "§2.3: the grant is issued for the day named in the blocking hard request"
     )
-    assert proposal.conflict_note, "the worker is told why they were asked"
+    assert proposal.conflict, "the worker is told why they were asked"
 
     # (b) The target worker — and only they — is notified, with the proposal id.
     notes = session.scalars(
@@ -268,7 +265,7 @@ def test_h3_friday_conflict_with_infeasible_probe_escalates(
 
     # §2.3 step 3: the visible admin holds the conflict, with the enumerated core.
     session.refresh(week)
-    _assert_minimal_core_escalation(session, roster, week, expect_in_note=("fri",))
+    _assert_minimal_core_escalation(session, roster, week, expect_items=((None, "fri"),))
 
     # §3.3: nothing to publish — no proposal is pending, and no solver rows exist.
     assert session.scalars(select(Assignment).where(Assignment.week_id == week.id)).all() == []
@@ -309,21 +306,26 @@ def test_unresolvable_conflict_escalates_without_a_proposal(
     ]
     assert escalations, "admin must receive a no-resolvable-move escalation"
     # §2.3: the blocking constraints are forwarded as a conflict explanation, not
-    # discarded — the note names the conflicting Monday requests.
-    note = escalations[0].payload.get("conflict_note")
-    assert note and "mon" in note.lower()
+    # discarded — the core names the conflicting Monday requests.
+    core = escalations[0].payload.get("conflict")
+    assert core and any(item["day"] == "mon" for item in core)
 
 
 # --- escalation carries the minimal unsat core (§2.3, §10, both paths) -------
 
 
 def _assert_minimal_core_escalation(
-    session: DbSession, roster: dict, week: Week, expect_in_note: tuple[str, ...]
+    session: DbSession,
+    roster: dict,
+    week: Week,
+    expect_items: tuple[tuple[int | None, str], ...],
 ) -> None:
     """§10: exactly one `sacrifice_escalated`, to the visible admin(s) ONLY (root
-    excluded); its payload carries the non-empty enumerated core naming the
-    conflicting hard requests; the week stays `solved`/unpublished; and the
-    escalation produced NO worker-facing notification."""
+    excluded); its payload carries the non-empty STRUCTURED core (v1.5:
+    {worker_id, day, slot} items, never prose) implicating each expected
+    (worker_id, day) pair — None matches any worker; the week stays
+    `solved`/unpublished; and the escalation produced NO worker-facing
+    notification."""
     escalations = session.scalars(
         select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
     ).all()
@@ -331,10 +333,13 @@ def _assert_minimal_core_escalation(
     assert escalations[0].user_id == roster["mattia"].id  # the visible admin
     assert all(n.user_id != roster["matteo"].id for n in escalations)  # root gets none
 
-    note = escalations[0].payload.get("conflict_note")
-    assert note, "the escalation must forward the enumerated unsat core"
-    lowered = note.lower()
-    assert all(token in lowered for token in expect_in_note)
+    core = escalations[0].payload.get("conflict")
+    assert core, "the escalation must forward the enumerated unsat core"
+    for worker_id, day in expect_items:
+        assert any(
+            item["day"] == day and (worker_id is None or item["worker_id"] == worker_id)
+            for item in core
+        ), f"core must implicate ({worker_id}, {day}): {core}"
 
     session.refresh(week)
     assert week.status is WeekStatus.SOLVED  # parked, unpublished
@@ -364,7 +369,9 @@ def test_decline_escalation_carries_minimal_core(client: TestClient, session: Db
     assert client.post(f"/sacrifice/{proposal.id}/decline").status_code == 200
 
     session.refresh(week)
-    _assert_minimal_core_escalation(session, roster, week, expect_in_note=("pasha", "thu"))
+    _assert_minimal_core_escalation(
+        session, roster, week, expect_items=((roster["pasha"].id, "thu"),)
+    )
 
 
 def test_no_move_escalation_carries_minimal_core(client: TestClient, session: DbSession) -> None:
@@ -380,7 +387,7 @@ def test_no_move_escalation_carries_minimal_core(client: TestClient, session: Db
     assert _solve(client, monday).json()["status"] == "infeasible"
 
     session.refresh(week)
-    _assert_minimal_core_escalation(session, roster, week, expect_in_note=("mon",))
+    _assert_minimal_core_escalation(session, roster, week, expect_items=((None, "mon"),))
 
 
 # --- propose → accept / decline (the §2.3 state machine) --------------------
@@ -479,7 +486,7 @@ def test_decline_escalates_to_admin_without_publishing(
     ]
     assert escalations, "admin must receive a declined-escalation notification"
     # §2.3: the escalation carries the conflict explanation, not just an outcome.
-    assert escalations[0].payload.get("conflict_note")
+    assert escalations[0].payload.get("conflict")
     matteo_notes = session.scalars(
         select(Notification).where(Notification.user_id == roster["matteo"].id)
     ).all()

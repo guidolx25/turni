@@ -244,8 +244,7 @@ def test_full_week_sacrifice_accepted_leads_to_publish(
         week,
         roster["pasha"].id,
         Day.THU,
-        conflict_note="No feasible schedule honors the current hard requests; "
-        "conflicting: Pasha thu full_day.",
+        conflict=[{"worker_id": roster["pasha"].id, "day": "thu", "slot": "full_day"}],
     )
 
     # While the offer is open the week cannot be published (§3.3).
@@ -320,8 +319,10 @@ def test_full_week_friday_conflict_with_infeasible_probe_ends_in_admin_escalatio
         select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
     ).all()
     assert [n.user_id for n in escalations] == [roster["mattia"].id]
-    note = escalations[0].payload["conflict_note"].lower()
-    assert "pasha" in note and "fri" in note
+    core = escalations[0].payload["conflict"]
+    assert any(
+        item["worker_id"] == roster["pasha"].id and item["day"] == "fri" for item in core
+    ), f"the structured core must implicate Pasha's Friday request: {core}"
 
     # Nothing was published, and the admin cannot publish the conflict away.
     assert (

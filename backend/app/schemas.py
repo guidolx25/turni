@@ -245,6 +245,16 @@ class ScheduleOut(BaseModel):
     assignments: list[ScheduleAssignmentOut]
 
 
+class ConflictItemOut(BaseModel):
+    """One blocking hard request from the §8 minimal unsat core (§6
+    sacrifice_proposals.conflict) — data the §9 dictionaries render in the
+    viewer's language; the API never ships prose here."""
+
+    worker_id: int
+    day: Day
+    slot: ConstraintSlot
+
+
 class SacrificeProposalOut(BaseModel):
     """A §2.3 sacrifice proposal as its target worker sees it (accept/decline).
     Echoes the week by Monday date and the offered free day."""
@@ -253,7 +263,7 @@ class SacrificeProposalOut(BaseModel):
     week: dt.date
     proposed_free_day: Day
     status: SacrificeStatus
-    conflict_note: str | None
+    conflict: list[ConflictItemOut] | None
     created_at: dt.datetime
 
     @classmethod
@@ -263,7 +273,11 @@ class SacrificeProposalOut(BaseModel):
             week=proposal.week.monday_date,
             proposed_free_day=proposal.proposed_free_day,
             status=proposal.status,
-            conflict_note=proposal.conflict_note,
+            conflict=(
+                [ConflictItemOut.model_validate(item) for item in proposal.conflict]
+                if proposal.conflict is not None
+                else None
+            ),
             created_at=proposal.created_at,
         )
 

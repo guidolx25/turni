@@ -262,7 +262,10 @@ class SacrificeProposal(Base):
         nullable=False,
         default=SacrificeStatus.PENDING,
     )
-    conflict_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # §8 minimal unsat core as DATA — a list of {worker_id, day, slot} dicts for
+    # the blocking hard requests. Rendered in the viewer's language by the §9
+    # dictionaries; never a pre-formatted sentence (v1.5).
+    conflict: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, nullable=False, default=utcnow)
 
     week: Mapped[Week] = relationship()
