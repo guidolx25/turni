@@ -21,6 +21,9 @@ from tests.helpers import (
     make_week,
 )
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
+
 
 def test_users_username_is_unique(connection: Connection) -> None:
     """§6 users(username UNIQUE) — the §7 login key."""

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
@@ -19,6 +20,9 @@ from app.notifications import EVENT_SCHEDULE_PUBLISHED
 from app.scheduling import get_or_create_week
 from app.solve_service import run_solve
 from tests.factories import PASSWORD, create_full_roster
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase3
 
 
 def _future_monday(weeks_ahead: int = 2) -> dt.date:

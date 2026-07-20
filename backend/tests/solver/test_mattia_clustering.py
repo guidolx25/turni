@@ -14,6 +14,8 @@ not a tendency — see `test_full_weekend_pair_splits_free_days_with_early_monda
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import Day
 from app.solver import SolverInput, SolverStatus, solve
 from tests.solver.fixtures import (
@@ -27,6 +29,9 @@ from tests.solver.fixtures import (
     free_day_of,
     roster,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 # All four cores on distinct days → Mattia works four days (jolly_days = 4): the
 # maximally-spread, S3-worst configuration.

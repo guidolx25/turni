@@ -13,6 +13,8 @@ on any AM/PM tie-break — see `test_s2_spread_beats_s3_keeps_pair_split_over_jo
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import AssignmentSlot, ConstraintKind, ConstraintSlot, Day
 from app.solver import PersonalConstraint, SolverInput, SolverStatus, solve
 from tests.solver.fixtures import (
@@ -26,6 +28,9 @@ from tests.solver.fixtures import (
     roster,
     worker_days,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 # Matteo exits Sunday PM (canonical prior_state), so S2 alternation strictly
 # prefers him on Mon AM. Pin his free day to Thu so he definitely works Monday.

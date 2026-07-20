@@ -36,6 +36,9 @@ from app.routers.auth import (
 from app.schemas import UserOut
 from tests.factories import PASSWORD, create_root, create_user, create_worker
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
+
 WRONG_PASSWORD = "not-the-password"
 
 

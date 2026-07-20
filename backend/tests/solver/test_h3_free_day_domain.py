@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import itertools
 
+import pytest
+
 from app.enums import ConstraintKind, ConstraintSlot, Day
 from app.solver import PersonalConstraint, SolverInput, SolverStatus, solve
 from app.solver.types import FREE_DAYS, SOLVER_DAYS
@@ -38,6 +40,9 @@ from tests.solver.fixtures import (
     roster,
     worker_days,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase3
 
 NON_FREE_DAYS = tuple(d for d in SOLVER_DAYS if d not in FREE_DAYS)
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session as DbSession
 
@@ -24,6 +25,9 @@ from app.schemas import UserAdminOut
 from app.visibility import visible_users_stmt
 from tests.factories import PASSWORD, create_admin, create_root, create_user, create_worker
 from tests.probe_app import probe_app
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
 
 
 def login(client: TestClient, username: str, password: str = PASSWORD) -> None:

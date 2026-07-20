@@ -10,6 +10,9 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import Engine, inspect
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
+
 # spec §6, table by table, in the order the spec writes them.
 SPEC_TABLES: dict[str, set[str]] = {
     "users": {

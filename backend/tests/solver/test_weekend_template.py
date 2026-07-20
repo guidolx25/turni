@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
 from app.enums import AssignmentRole, AssignmentSlot, AssignmentSource, Day
 from app.solver.weekend import emit_weekend_template
 from tests.solver.fixtures import (
@@ -20,6 +22,9 @@ from tests.solver.fixtures import (
     WEEK_MONDAY,
     roster,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 # H5 exact expected slots as (day, slot, role, worker_id). Two bagnino rows and
 # four spiaggino rows (both spiaggini, full-day) per weekend day.

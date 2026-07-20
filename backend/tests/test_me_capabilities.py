@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session as DbSession
 
@@ -21,6 +22,9 @@ from app.models import User
 from app.permissions import has_admin_capability, has_root_capability
 from tests.factories import PASSWORD, create_admin, create_root, create_worker
 from tests.probe_app import probe_app
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
 
 # §7: the six §5 rows /me advertises, spelled out rather than read off
 # `Capabilities.model_fields` — a stray field added to both the schema and the

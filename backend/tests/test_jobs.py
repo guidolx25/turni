@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 from zoneinfo import ZoneInfo
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
@@ -23,6 +24,9 @@ from app.scheduler import WINDOW_CLOSE_TRIGGER, build_scheduler
 from app.scheduling import get_or_create_week
 from app.solve_service import run_solve
 from tests.factories import create_full_roster
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase3
 
 ROME = ZoneInfo("Europe/Rome")
 

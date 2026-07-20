@@ -17,6 +17,8 @@ boundary, so its effect on `alternation_breaks` is a clean constant offset.
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import AssignmentSlot, ConstraintKind, ConstraintSlot, Day
 from app.solver import PersonalConstraint, PriorSlot, SolverInput, SolverStatus, solve
 from tests.solver.fixtures import (
@@ -28,6 +30,9 @@ from tests.solver.fixtures import (
     roster,
     worker_days,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 
 def _solve(prior_state, free_day_pins, constraints=()):

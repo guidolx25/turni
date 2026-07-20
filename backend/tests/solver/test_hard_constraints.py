@@ -8,6 +8,8 @@ H6 (Mattia coverage) is proven separately as an emergent property.
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import (
     AssignmentRole,
     AssignmentSlot,
@@ -30,6 +32,9 @@ from tests.solver.fixtures import (
     worker_days,
     workers_in_slot,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 SOLVER_SLOTS = (AssignmentSlot.AM, AssignmentSlot.PM)
 BOTH_ROLES = (AssignmentRole.BAGNINO, AssignmentRole.SPIAGGINO)

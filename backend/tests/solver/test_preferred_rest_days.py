@@ -14,6 +14,8 @@ set, not a constant. Feeding a different request set moves the free days with it
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import ConstraintKind, ConstraintSlot, Day
 from app.solver import PersonalConstraint, SolverInput, SolverStatus, solve
 from tests.solver.fixtures import (
@@ -27,6 +29,9 @@ from tests.solver.fixtures import (
     free_day_of,
     roster,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 # The requested habit as SOFT requests (a preference, not a hard rule): the two
 # spiaggini rest Mon / Tue, the two bagnini rest Tue / Wed. Feasible together —

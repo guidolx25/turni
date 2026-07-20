@@ -7,12 +7,16 @@ caller's own rows. The write side is covered where the fan-out happens
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from app.models import Notification
 from tests.factories import PASSWORD, create_user
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase3
 
 
 def login(client: TestClient, username: str) -> None:

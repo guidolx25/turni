@@ -2,6 +2,11 @@
 
 import sys
 
+import pytest
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase0
+
 
 def test_python_312_or_newer() -> None:
     assert sys.version_info >= (3, 12)

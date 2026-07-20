@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
 from app.enums import AssignmentSlot
 from app.solver.continuity import as_prior_state, compute_next_solver_state
 from app.solver.types import PriorSlot
@@ -25,6 +27,9 @@ from tests.solver.fixtures import (
     canonical_prior_state,
     roster,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 SUNDAY = WEEK_MONDAY + dt.timedelta(days=6)
 

@@ -22,6 +22,8 @@ issued, and illegal otherwise.
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import AssignmentRole, ConstraintKind, ConstraintSlot, Day
 from app.solver import PersonalConstraint, SolverInput, SolverStatus, solve
 from app.solver.types import FREE_DAYS, SOLVER_DAYS, Weights, free_day_domain
@@ -38,6 +40,9 @@ from tests.solver.fixtures import (
     roster,
     worker_days,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase3
 
 # The F-pair (§2.2 rest spread): the two full-day spiaggini of the H5 template.
 F_PAIR = frozenset({PASHA, AMIR})

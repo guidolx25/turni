@@ -42,3 +42,17 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Phase-of-origin markers (project conventions): every test module carries
+# exactly one, so a gate run is selectively reproducible later — e.g.
+# `pytest -m phase3`. Strict, so a typo'd marker fails collection instead of
+# silently selecting nothing.
+addopts = "--strict-markers"
+markers = [
+    "phase0: originated in Phase 0 (scaffold)",
+    "phase1: originated in Phase 1 (data + auth)",
+    "phase2: originated in Phase 2 (solver core)",
+    "phase3: originated in Phase 3 (constraints lifecycle)",
+    "phase4: originated in Phase 4 (schedule UI + swaps)",
+    "phase5: originated in Phase 5 (notifications + i18n)",
+    "phase6: originated in Phase 6 (admin/root + deploy)",
+]

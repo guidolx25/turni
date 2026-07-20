@@ -14,6 +14,8 @@ pass.
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import AssignmentRole, AssignmentSlot, Day
 from app.solver import SolverInput, SolverStatus, solve
 from tests.solver.fixtures import (
@@ -32,6 +34,9 @@ from tests.solver.fixtures import (
     worker_days,
     workers_in_slot,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 # The photographed free days (§8): Pasha Mon, Francesco + Amir Tue, Matteo Wed.
 GOLDEN_PINS = {PASHA: Day.MON, FRANCESCO: Day.TUE, AMIR: Day.TUE, MATTEO: Day.WED}

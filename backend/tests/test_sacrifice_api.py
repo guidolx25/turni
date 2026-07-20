@@ -67,6 +67,9 @@ from app.solver import SOLVER_DAYS, SolverStatus
 from app.visibility import admin_recipients
 from tests.factories import PASSWORD, create_full_roster, create_user
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase3
+
 
 def _future_monday(weeks_ahead: int = 2) -> dt.date:
     today = dt.datetime.now(dt.UTC).date()

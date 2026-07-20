@@ -34,6 +34,9 @@ from app.models import User
 from app.security import verify_password
 from app.seed import SEED_ACCOUNTS, password_env_var, seed_accounts
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
+
 # The exact strings seed.py prints. Parsed rather than eyeballed because the
 # generated password is legible in precisely one place and never again.
 GENERATED_RE = re.compile(r"^created: (?P<username>\S+) — generated password: (?P<password>.+)$")

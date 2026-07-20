@@ -10,6 +10,8 @@ attribution" is itself a failure.
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import ConstraintKind, ConstraintSlot, Day
 from app.solver import PersonalConstraint, SolverInput, SolverStatus, solve
 from tests.solver.fixtures import (
@@ -22,6 +24,9 @@ from tests.solver.fixtures import (
     canonical_prior_state,
     roster,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 # Monday needs one bagnino AM and one bagnino PM. Block ALL THREE bagnini
 # (Matteo, Francesco, and the jolly Mattia) for the whole of Monday → no bagnino

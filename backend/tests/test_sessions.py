@@ -33,6 +33,9 @@ from app.sessions import (
 )
 from tests.factories import create_worker
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
+
 # A fixed instant: all session-lifetime arithmetic is done relative to this.
 T0 = dt.datetime(2026, 7, 13, 8, 0, tzinfo=dt.UTC)
 

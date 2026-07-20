@@ -14,6 +14,8 @@ silently vanished and the solver would co-locate the pair to shave a jolly day.
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import Day
 from app.solver import SolverInput, SolverStatus, full_weekend_worker_ids, solve
 from tests.solver.fixtures import (
@@ -26,6 +28,9 @@ from tests.solver.fixtures import (
     free_day_of,
     roster,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase3
 
 # Same lever as the tier-ordering S2>S3 test: pin BOTH core bagnini to Thursday so
 # the ONLY route to jolly_days = 2 is co-locating the two full-weekend spiaggini on

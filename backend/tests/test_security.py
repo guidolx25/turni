@@ -20,6 +20,9 @@ from app.security import (
     verify_password,
 )
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
+
 PASSWORD = "una-password-piuttosto-lunga"
 
 # Deliberately far below the library defaults, to stand in for a hash written by

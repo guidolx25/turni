@@ -26,6 +26,9 @@ from app.config import (
     Settings,
 )
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
+
 # 43 chars, the shape `secrets.token_urlsafe(32)` produces — what §11 expects an
 # operator to actually put in the environment.
 REAL_SECRET_KEY = "Ck9nQ2ZUcXpZbVJ2S3hMd1B0TmhHZFNqQWJFdVh5Zg"

@@ -16,6 +16,9 @@ from app.enums import WeekStatus
 from app.models import Week
 from app.scheduling import ensure_monday, is_submittable, window_deadline
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase3
+
 
 def _week(monday: dt.date, status: WeekStatus = WeekStatus.OPEN) -> Week:
     """A detached Week row — is_submittable/window_deadline read only its fields."""

@@ -8,6 +8,8 @@ value CP-SAT minimizes with the input weights.
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import ConstraintKind, ConstraintSlot, Day
 from app.solver import PersonalConstraint, SolverInput, SolverStatus, solve
 from tests.solver.fixtures import (
@@ -17,6 +19,9 @@ from tests.solver.fixtures import (
     canonical_prior_state,
     roster,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 # A solve carrying a non-trivial mix so the breakdown fields exercise real,
 # non-zero terms: a soft request Matteo cannot fully avoid plus a pinned free day.

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from alembic.util.exc import CommandError
 from sqlalchemy import inspect
 
@@ -25,6 +26,9 @@ from tests.conftest import (
     sqlite_url,
 )
 from tests.test_schema_tables import SPEC_TABLES
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
 
 
 def _table_names(path: Path) -> set[str]:

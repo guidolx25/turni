@@ -26,6 +26,9 @@ from tests.helpers import (
     make_week,
 )
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
+
 DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 
 # (table, column) -> the value set spec §6 writes for it.

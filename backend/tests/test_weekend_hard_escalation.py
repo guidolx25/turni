@@ -38,6 +38,9 @@ from app.notifications import EVENT_WEEKEND_HARD_ESCALATED
 from app.scheduling import get_or_create_week
 from tests.factories import PASSWORD, create_full_roster, create_user
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase3
+
 
 def _future_monday(weeks_ahead: int = 2) -> dt.date:
     today = dt.datetime.now(dt.UTC).date()

@@ -27,6 +27,9 @@ from app.enums import UserRole
 from app.models import User
 from tests.helpers import FIXED_TS
 
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase1
+
 ROME = ZoneInfo("Europe/Rome")
 
 

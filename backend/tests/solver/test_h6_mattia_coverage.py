@@ -13,6 +13,8 @@ H1 (coverage) + H3/H4 (one free day, one slot per working day):
 
 from __future__ import annotations
 
+import pytest
+
 from app.enums import (
     AssignmentRole,
     ConstraintKind,
@@ -36,6 +38,9 @@ from tests.solver.fixtures import (
     free_day_of,
     roster,
 )
+
+# Phase of origin (project conventions: gate runs selectable per phase).
+pytestmark = pytest.mark.phase2
 
 # Free-day pins that spread the four core gaps across four distinct role-days,
 # so the expected jolly occupancy is unambiguous (no doubling):
