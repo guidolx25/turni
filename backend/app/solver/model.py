@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 # away, and fail loudly past 10 s (see the wall-clock guard in solve()).
 _MAX_SOLVE_SECONDS: float = 10.0
 
+# Any fixed value works; what matters is that it never changes silently. The
+# schedule this project publishes must be a function of its inputs alone.
+_SOLVER_SEED: int = 20260713  # the golden week's Monday (§8), for traceability
+
 _SLOTS: tuple[AssignmentSlot, ...] = (AssignmentSlot.AM, AssignmentSlot.PM)
 
 
@@ -277,6 +281,15 @@ def solve(inp: SolverInput) -> SolverResult:
     # --- Solve -------------------------------------------------------------
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = _MAX_SOLVE_SECONDS
+    # Deterministic search. CP-SAT's default portfolio runs several workers in
+    # parallel and returns whichever optimum finishes first, so an equally
+    # optimal schedule can differ between machines, runs and core counts. The
+    # objective (§2.2) frequently admits ties — two workers' free days are often
+    # interchangeable — which would make the §8 golden test a coin flip and any
+    # reported schedule irreproducible when debugging. One worker plus a fixed
+    # seed makes the same input yield the same week, everywhere, forever.
+    solver.parameters.num_workers = 1
+    solver.parameters.random_seed = _SOLVER_SEED
     started = time.perf_counter()
     cp_status = solver.Solve(model)
     elapsed = time.perf_counter() - started

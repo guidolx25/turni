@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session as DbSession
 from app.config import settings
 from app.enums import (
     AssignmentRole,
+    AssignmentSlot,
     AssignmentSource,
     Day,
     SacrificeStatus,
@@ -83,29 +84,90 @@ def _rows(session: DbSession, week: Week) -> list[Assignment]:
     return list(session.scalars(select(Assignment).where(Assignment.week_id == week.id)).all())
 
 
-def _legal_after(
-    rows: list[Assignment], user_id: int, give: Assignment, take: Assignment, *, core: bool
-) -> bool:
-    """Would this party still satisfy H2 (+ H3/H4 if core) after the exchange?
+# CP-SAT may return any optimum, and equally-optimal schedules differ between
+# machines. So no test may assume a particular week: each states the SHAPE it
+# needs as a predicate, searches the week the solver actually produced, and
+# fails loudly if that shape is absent. These helpers model the §2.1 rules well
+# enough to CHOOSE a scenario — never to assert an outcome, which is always the
+# server's own answer.
+_Held = set[tuple[Day, AssignmentSlot, AssignmentRole]]
 
-    Used ONLY to pick a scenario out of the week the solver happened to produce
-    — never to assert an outcome. The assertions are always the server's own
-    answer; this just avoids hardcoding row ids that a solver change would
-    silently invalidate.
-    """
+
+def _held_after(rows: list[Assignment], user_id: int, give: Assignment, take: Assignment) -> _Held:
+    """What this party would hold once the two rows change hands."""
     held = {(a.day, a.slot, a.role) for a in rows if a.user_id == user_id}
     held.discard((give.day, give.slot, give.role))
     held.add((take.day, take.slot, take.role))
+    return held
+
+
+def _h2_ok(held: _Held) -> bool:
+    """H2: at most one role per (day, slot)."""
     slots = [(day, slot) for day, slot, _ in held]
-    if len(slots) != len(set(slots)):
-        return False  # H2: two roles in one (day, slot)
+    return len(slots) == len(set(slots))
+
+
+def _h4_ok(held: _Held) -> bool:
+    """H4: a core worker works at most one slot per weekday."""
+    weekdays = [day for day, _, _ in held if day in SOLVER_DAYS]
+    return len(weekdays) == len(set(weekdays))
+
+
+def _free_after(held: _Held) -> set[Day]:
+    """The weekdays this party would have off."""
+    return set(SOLVER_DAYS) - {day for day, _, _ in held if day in SOLVER_DAYS}
+
+
+def _role_compatible(user_role: UserRole, row_role: AssignmentRole) -> bool:
+    """§4: bagnino↔bagnino, spiaggino↔spiaggino; the jolly holds either."""
+    return user_role is UserRole.JOLLY or user_role.value == row_role.value
+
+
+def _legal_after(
+    rows: list[Assignment], user_id: int, give: Assignment, take: Assignment, *, core: bool
+) -> bool:
+    """Would this party still satisfy H2 (+ H3/H4 if core) after the exchange?"""
+    held = _held_after(rows, user_id, give, take)
+    if not _h2_ok(held):
+        return False
     if not core:
         return True  # H6: the jolly may double and holds no H3 free day
-    weekdays = [day for day, _, _ in held if day in SOLVER_DAYS]
-    if len(weekdays) != len(set(weekdays)):
-        return False  # H4: two slots on one weekday
-    free = set(SOLVER_DAYS) - set(weekdays)
+    if not _h4_ok(held):
+        return False
+    free = _free_after(held)
     return len(free) == 1 and next(iter(free)) in FREE_DAYS  # H3
+
+
+def _legal_exchanges(
+    session: DbSession, rows: list[Assignment]
+) -> list[tuple[Assignment, Assignment]]:
+    """Every (mine, theirs) pair this week admits as a fully valid §4 swap."""
+    found: list[tuple[Assignment, Assignment]] = []
+    for mine in rows:
+        for theirs in rows:
+            if mine.user_id == theirs.user_id:
+                continue
+            requester = session.get(User, mine.user_id)
+            target = session.get(User, theirs.user_id)
+            assert requester is not None and target is not None
+            # H5: a swap touching the weekend is bagnino↔bagnino or nothing.
+            touches_weekend = mine.day in _WEEKEND or theirs.day in _WEEKEND
+            if touches_weekend and {mine.role, theirs.role} != {AssignmentRole.BAGNINO}:
+                continue
+            if not _role_compatible(requester.role, theirs.role):
+                continue
+            if not _role_compatible(target.role, mine.role):
+                continue
+            if not _legal_after(
+                rows, requester.id, mine, theirs, core=requester.role is not UserRole.JOLLY
+            ):
+                continue
+            if not _legal_after(
+                rows, target.id, theirs, mine, core=target.role is not UserRole.JOLLY
+            ):
+                continue
+            found.append((mine, theirs))
+    return found
 
 
 def _worked_weekdays(rows: list[Assignment], user_id: int) -> set[Day]:
@@ -117,6 +179,43 @@ def _free_weekday(rows: list[Assignment], user_id: int) -> Day:
     free = set(SOLVER_DAYS) - _worked_weekdays(rows, user_id)
     assert len(free) == 1, f"user {user_id} must have exactly one free weekday, got {free}"
     return next(iter(free))
+
+
+def _find_friday_free_day_exchange(
+    session: DbSession, rows: list[Assignment]
+) -> tuple[Assignment, Assignment] | None:
+    """An exchange that would leave the REQUESTER resting on Friday — legal only
+    under a §2.3 grant (§2.1 H3). Everything else about it is valid, and the
+    other party stays legal, so the only rule it can break is the requester's
+    H3 domain. That makes it the exact pair for the without-grant refusal and
+    the with-grant acceptance, which must differ ONLY in the grant."""
+    for mine in rows:
+        requester = session.get(User, mine.user_id)
+        assert requester is not None
+        if requester.role is UserRole.JOLLY or mine.day in _WEEKEND:
+            continue
+        for theirs in rows:
+            target = session.get(User, theirs.user_id)
+            assert target is not None
+            if target.id == requester.id or theirs.day in _WEEKEND:
+                continue
+            if not _role_compatible(requester.role, theirs.role):
+                continue
+            if not _role_compatible(target.role, mine.role):
+                continue
+            held = _held_after(rows, requester.id, mine, theirs)
+            # Everything holds for the requester EXCEPT that their one free day
+            # would fall on Friday.
+            if not (_h2_ok(held) and _h4_ok(held)):
+                continue
+            if _free_after(held) != {Day.FRI}:
+                continue
+            if not _legal_after(
+                rows, target.id, theirs, mine, core=target.role is not UserRole.JOLLY
+            ):
+                continue
+            return mine, theirs
+    return None
 
 
 def _find_same_day_pair(
@@ -256,16 +355,16 @@ def test_root_as_a_party_is_notified_like_any_worker(
     week = _published_week(session, roster, _future_monday())
     rows = _rows(session, week)
     matteo = roster["matteo"]
-    day = next(
-        d
-        for d in SOLVER_DAYS
-        if any(a.user_id == matteo.id and a.day is d for a in rows)
-        and len({a.user_id for a in rows if a.day is d and a.role is AssignmentRole.BAGNINO}) == 2
+    pair = next(
+        (
+            (mine, theirs)
+            for mine, theirs in _legal_exchanges(session, rows)
+            if mine.user_id == matteo.id
+        ),
+        None,
     )
-    mine = next(a for a in rows if a.user_id == matteo.id and a.day is day)
-    theirs = next(
-        a for a in rows if a.day is day and a.role is AssignmentRole.BAGNINO and a.id != mine.id
-    )
+    assert pair is not None, "this week offers root no legal swap to be a party to"
+    mine, theirs = pair
     target = session.get(User, theirs.user_id)
     assert target is not None
 
@@ -381,19 +480,11 @@ def test_the_jolly_may_take_either_role(client: TestClient, session: DbSession) 
     mattia_rows = [a for a in rows if a.user_id == mattia.id and a.day in SOLVER_DAYS]
     assert mattia_rows, "the jolly must work somewhere in this week"
 
-    core = {u.id for u in roster.values() if u.role is not UserRole.JOLLY}
     candidate = next(
         (
             (mine, theirs)
-            for theirs in mattia_rows
-            for mine in rows
-            # The core worker takes the jolly's row, so THEIR worker role must
-            # carry it; the jolly can hold anything (§1).
-            if mine.user_id in core
-            and mine.day in SOLVER_DAYS
-            and mine.role is theirs.role
-            and _legal_after(rows, mine.user_id, mine, theirs, core=True)
-            and _legal_after(rows, mattia.id, theirs, mine, core=False)
+            for mine, theirs in _legal_exchanges(session, rows)
+            if theirs.user_id == mattia.id
         ),
         None,
     )
@@ -460,35 +551,20 @@ def test_h3_violation_when_the_free_day_would_land_on_friday(
     Friday slot for a slot on the worker's current free day pushes the free day
     onto Friday — outside the default domain — so the swap is refused.
 
-    Counterpart is the JOLLY on purpose: he holds no free day (H6), so the
-    refusal can only come from the requester's H3, never from the other side."""
+    The other party is required to remain legal, so the refusal can only be the
+    requester's H3 — and the requester is the party validated first."""
     roster = create_full_roster(session)
     week = _published_week(session, roster, _future_monday())
     rows = _rows(session, week)
-    mattia = roster["mattia"]
-    core = [u for u in roster.values() if u.role is not UserRole.JOLLY]
-    pair = next(
-        (
-            (mine, theirs)
-            for requester in core
-            for mine in rows
-            if mine.user_id == requester.id and mine.day is Day.FRI
-            for theirs in rows
-            if theirs.user_id == mattia.id
-            and theirs.role is mine.role
-            # ... onto the requester's free day, so they end up working Mon–Thu
-            # in full and resting Friday.
-            and theirs.day is _free_weekday(rows, requester.id)
-        ),
-        None,
-    )
-    assert pair is not None, "this week offers no Friday↔free-day jolly pair"
+    pair = _find_friday_free_day_exchange(session, rows)
+    assert pair is not None, "this week offers no exchange pushing a free day to Friday"
     mine, theirs = pair
     requester = session.get(User, mine.user_id)
-    assert requester is not None
+    target = session.get(User, theirs.user_id)
+    assert requester is not None and target is not None
 
     login(client, requester.username)
-    code, body = _create(client, mattia, mine, theirs)
+    code, body = _create(client, target, mine, theirs)
     assert code == 422, body
     assert body["detail"] == "swap_h3_violation"
 
@@ -504,25 +580,12 @@ def test_an_accepted_sacrifice_grant_makes_the_friday_free_day_legal(
     roster = create_full_roster(session)
     week = _published_week(session, roster, _future_monday())
     rows = _rows(session, week)
-    mattia = roster["mattia"]
-    core = [u for u in roster.values() if u.role is not UserRole.JOLLY]
-    pair = next(
-        (
-            (mine, theirs)
-            for requester in core
-            for mine in rows
-            if mine.user_id == requester.id and mine.day is Day.FRI
-            for theirs in rows
-            if theirs.user_id == mattia.id
-            and theirs.role is mine.role
-            and theirs.day is _free_weekday(rows, requester.id)
-        ),
-        None,
-    )
-    assert pair is not None, "this week offers no Friday↔free-day jolly pair"
+    pair = _find_friday_free_day_exchange(session, rows)
+    assert pair is not None, "this week offers no exchange pushing a free day to Friday"
     mine, theirs = pair
     requester = session.get(User, mine.user_id)
-    assert requester is not None
+    target = session.get(User, theirs.user_id)
+    assert requester is not None and target is not None
 
     # The grant of record: an ACCEPTED §2.3 proposal moving this worker's free
     # day to Friday for this week.
@@ -538,7 +601,7 @@ def test_an_accepted_sacrifice_grant_makes_the_friday_free_day_legal(
     session.commit()
 
     login(client, requester.username)
-    code, body = _create(client, mattia, mine, theirs)
+    code, body = _create(client, target, mine, theirs)
     assert code == 201, f"the grant must widen H3's domain for the swap validator too: {body}"
 
 
@@ -550,34 +613,32 @@ def test_h2_violation_is_refused(client: TestClient, session: DbSession) -> None
     week = _published_week(session, roster, _future_monday())
     rows = _rows(session, week)
     mattia = roster["mattia"]
-    doubled = [
-        (a, b)
-        for a in rows
-        if a.user_id == mattia.id
-        for b in rows
-        # A row the jolly does NOT hold, in the same (day, slot) as one he does,
-        # in the other role: taking it would put him in both roles at once.
-        if b.user_id != mattia.id and b.day is a.day and b.slot is a.slot and b.role is not a.role
-    ]
-    assert doubled, "the jolly must hold a slot whose counterpart role is elsewhere"
-    mine_of_jolly, counterpart = doubled[0]
-    # The jolly trades away a DIFFERENT row of his, and takes the counterpart —
-    # so after the exchange he holds both roles of that one (day, slot).
-    tradeable = next(
-        a
-        for a in rows
-        if a.user_id == mattia.id and a.id != mine_of_jolly.id and a.role is counterpart.role
-    )
-    target = session.get(User, counterpart.user_id)
-    assert target is not None
-    assert not _legal_after(rows, mattia.id, tradeable, counterpart, core=False), (
-        "the scenario must actually put the jolly in two roles at once"
-    )
 
-    # The jolly is the REQUESTER, so he is the first party validated — the
-    # refusal is unambiguously his H2, not a knock-on effect on the other side.
+    # The jolly gives up one of his rows and takes another worker's, landing him
+    # in two roles at once. The OTHER party must stay legal, so the refusal is
+    # unambiguously H2 — and the jolly is the requester, hence validated first.
+    scenario = next(
+        (
+            (give, take)
+            for give in rows
+            if give.user_id == mattia.id
+            for take in rows
+            if take.user_id != mattia.id
+            and _role_compatible(session.get(User, take.user_id).role, give.role)
+            and take.day not in _WEEKEND
+            and give.day not in _WEEKEND
+            and not _h2_ok(_held_after(rows, mattia.id, give, take))
+            and _legal_after(rows, take.user_id, take, give, core=True)
+        ),
+        None,
+    )
+    assert scenario is not None, "this week offers the jolly no H2-violating exchange"
+    give, take = scenario
+    target = session.get(User, take.user_id)
+    assert target is not None
+
     login(client, mattia.username)
-    code, body = _create(client, target, tradeable, counterpart)
+    code, body = _create(client, target, give, take)
     assert code == 422, body
     assert body["detail"] == "swap_h2_violation"
 
