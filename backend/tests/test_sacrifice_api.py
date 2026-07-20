@@ -43,14 +43,16 @@ hard full-day FRIDAY request — the one shape that reaches the propose branch
 from __future__ import annotations
 
 import datetime as dt
+import logging
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session as DbSession
 
 from app.audit import ACTION_SACRIFICE
-from app.enums import ConstraintKind, ConstraintSlot, Day, SacrificeStatus, WeekStatus
-from app.models import Assignment, AuditLog, Constraint, Notification, SacrificeProposal, Week
+from app.enums import ConstraintKind, ConstraintSlot, Day, SacrificeStatus, UserRole, WeekStatus
+from app.models import Assignment, AuditLog, Constraint, Notification, SacrificeProposal, User, Week
 from app.notifications import (
     EVENT_SACRIFICE_ESCALATED,
     EVENT_SACRIFICE_PROPOSED,
@@ -58,11 +60,12 @@ from app.notifications import (
     EVENT_SCHEDULE_PUBLISHED,
 )
 from app.routers.admin import ERROR_SACRIFICE_PENDING
-from app.sacrifice_service import _create_proposal
+from app.sacrifice_service import _create_proposal, decline_sacrifice, open_sacrifice
 from app.scheduling import get_or_create_week
 from app.solve_service import run_solve
-from app.solver import SOLVER_DAYS
-from tests.factories import PASSWORD, create_full_roster
+from app.solver import SOLVER_DAYS, SolverStatus
+from app.visibility import admin_recipients
+from tests.factories import PASSWORD, create_full_roster, create_user
 
 
 def _future_monday(weeks_ahead: int = 2) -> dt.date:
@@ -787,3 +790,120 @@ def test_accepted_then_infeasible_resolve_does_not_re_offer_accepted_worker(
     assert session.scalars(
         select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
     ).all(), "§2.3 step 4: nothing is resolved silently"
+
+
+# --- degenerate roster: no visible admin to escalate TO ----------------------
+#
+# §2.3 step 4 forbids a silent resolution, and an escalation nobody receives is
+# exactly that: the week is parked in `solved`, unpublished and worker-invisible,
+# with no human told it needs resolving. `admin_recipients` can legitimately come
+# back empty — the only admin-capable account may be root, which the role-based
+# fan-out excludes (§5), or the sole visible admin may be deactivated. On that
+# path `_escalate` must make the gap LOUD in the log rather than leaving only an
+# audit row, mirroring `constraints._escalate_weekend_hard`.
+#
+# Both call sites are covered: outcome="escalated" (no free-day move restores
+# coverage) and outcome="declined" (the worker refused the offer).
+#
+# Driven through the service functions rather than the HTTP routes on purpose:
+# `caplog` does not capture records emitted inside the TestClient's request
+# thread, so an over-HTTP version of these assertions would pass vacuously (the
+# same reason `test_weekend_hard_escalation.py` drives `upsert_constraint`
+# directly). The zero-recipient branch is route-independent.
+
+
+def _roster_without_visible_admin(session: DbSession) -> dict[str, User]:
+    """The §1 roster the solver needs, but with NO visible admin: Matteo holds
+    root (excluded from every role-based fan-out, §5) and Mattia keeps the jolly
+    role H6 depends on while dropping `is_admin`. Roles are untouched, so the
+    solver sees the same workforce as `create_full_roster` — the only difference
+    is who, if anyone, an escalation can reach."""
+    roster = {
+        "matteo": create_user(session, "matteo", role=UserRole.BAGNINO, is_root=True),
+        "francesco": create_user(session, "francesco", role=UserRole.BAGNINO),
+        "pasha": create_user(session, "pasha", role=UserRole.SPIAGGINO),
+        "amir": create_user(session, "amir", role=UserRole.SPIAGGINO),
+        "mattia": create_user(session, "mattia", role=UserRole.JOLLY, is_admin=False),
+    }
+    assert admin_recipients(session) == [], "precondition: nobody visible to escalate to"
+    return roster
+
+
+def _escalate_audit_rows(session: DbSession) -> list[AuditLog]:
+    return [
+        row
+        for row in session.scalars(
+            select(AuditLog).where(AuditLog.action == ACTION_SACRIFICE, AuditLog.entity == "week")
+        ).all()
+        if row.payload and row.payload.get("transition") == "escalate"
+    ]
+
+
+def _assert_loud_but_unreachable_escalation(
+    session: DbSession, caplog: pytest.LogCaptureFixture, monday: dt.date, outcome: str
+) -> None:
+    """The zero-recipient contract: no notification is invented, the audit row is
+    still written (the escalation attempt is on the record either way), and the
+    unreachable hand-off is logged as an ERROR naming the week and the outcome."""
+    assert (
+        session.scalars(
+            select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
+        ).all()
+        == []
+    ), "with no visible admin no escalation notification may be invented"
+
+    rows = _escalate_audit_rows(session)
+    assert rows, "the escalation attempt must still be audited"
+    assert rows[-1].payload["outcome"] == outcome
+
+    errors = [rec for rec in caplog.records if rec.levelno == logging.ERROR]
+    assert errors, "an escalation reaching nobody must be logged as an error"
+    message = errors[-1].getMessage().lower()
+    assert "no visible admin" in message
+    # The log must identify WHICH week is stranded and how it got there, not merely
+    # announce that a gap exists.
+    assert monday.isoformat() in message
+    assert outcome in message
+
+
+def test_escalation_with_no_visible_admin_logs_instead_of_going_silent(
+    session: DbSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§2.3 step 4, `open_sacrifice` call site (outcome="escalated"): all three
+    bagnini hard-off Monday, so no core worker's free-day move restores coverage
+    and no proposal can be opened. With no visible admin the hand-off has no
+    recipient — it is logged loudly, and the audit row still lands."""
+    roster = _roster_without_visible_admin(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    for name in ("matteo", "francesco", "mattia"):
+        _hard(session, roster[name].id, week, Day.MON)
+
+    result = run_solve(session, week)
+    assert result.status is SolverStatus.INFEASIBLE, "the escalation branch needs a REAL conflict"
+
+    with caplog.at_level(logging.ERROR, logger="app.sacrifice_service"):
+        proposal = open_sacrifice(session, week, result)
+    assert proposal is None  # no free-day move helps → escalation, not a proposal
+
+    _assert_loud_but_unreachable_escalation(session, caplog, monday, outcome="escalated")
+
+
+def test_decline_escalation_with_no_visible_admin_logs_instead_of_going_silent(
+    session: DbSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§2.3 step 3 (decline), `decline_sacrifice` call site (outcome="declined"):
+    the worker refuses the offered free day, so the conflict is handed to the
+    admin unresolved. With no visible admin to hand it to, the same guard applies —
+    loud log, audit row written, no notification conjured."""
+    roster = _roster_without_visible_admin(session)
+    monday = _future_monday()
+    week, proposal = _force_proposal(session, roster, monday, worker="pasha", day=Day.THU)
+
+    with caplog.at_level(logging.ERROR, logger="app.sacrifice_service"):
+        decline_sacrifice(session, proposal, roster["pasha"])
+    assert proposal.status is SacrificeStatus.DECLINED
+
+    session.refresh(week)
+    assert week.status is WeekStatus.SOLVED, "a declined week is parked, never published"
+    _assert_loud_but_unreachable_escalation(session, caplog, monday, outcome="declined")

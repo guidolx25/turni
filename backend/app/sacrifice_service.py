@@ -30,6 +30,8 @@ excluded (§5); Matteo-as-worker still gets his own per-user notifications elsew
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
@@ -56,6 +58,8 @@ from app.solver import (
 from app.visibility import admin_recipients
 
 # Calendar order for a deterministic probe sequence over candidate days.
+logger = logging.getLogger(__name__)
+
 _DAY_INDEX: dict[Day, int] = {d: i for i, d in enumerate(Day)}
 
 ERROR_PROPOSAL_NOT_FOUND = "sacrifice_not_found"
@@ -285,7 +289,21 @@ def _escalate(db: DbSession, week: Week, outcome: str, conflict_note: str | None
     audit.record(
         db, None, audit.ACTION_SACRIFICE, "week", week.id, {"transition": "escalate", **payload}
     )
-    for admin in admin_recipients(db):
+    recipients = admin_recipients(db)
+    if not recipients:
+        # Never escalate into the void: with no visible admin the week is parked in
+        # `solved` with nobody told it needs resolving, so make the gap loud rather
+        # than leaving only an audit row (§2.3 step 4). Mirrors the same guard on
+        # the weekend-hard escalation path.
+        logger.error(
+            "Week %s escalated (%s) but has no visible admin recipient; it is parked "
+            "in `solved` with no one notified. Conflict: %s",
+            week.monday_date.isoformat(),
+            outcome,
+            conflict_note,
+        )
+        return
+    for admin in recipients:
         notify(db, admin, EVENT_SACRIFICE_ESCALATED, payload)
 
 
