@@ -1,1 +1,46 @@
 @import 'tailwindcss';
+
+/*
+ * Design tokens (spec §9): restrained dark palette, deliberate typography.
+ * Every color and type decision lives here — views compose utilities from
+ * these tokens and never invent ad-hoc values.
+ *
+ *  - surface-0/1/2   background layers, near-black upward
+ *  - line            hairline borders / separators
+ *  - ink-1/2/3       one neutral text scale (primary / secondary / faint)
+ *  - bagnino         muted water blue  — lifeguard accent
+ *  - spiaggino       muted sand ochre  — beach-worker accent
+ *  - danger          desaturated red   — errors, rejections
+ *  - ok              desaturated green — accepted / applied
+ */
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --color-surface-0: oklch(0.16 0.008 250);
+  --color-surface-1: oklch(0.2 0.009 250);
+  --color-surface-2: oklch(0.24 0.01 250);
+  --color-line: oklch(0.31 0.012 250);
+
+  --color-ink-1: oklch(0.93 0.005 250);
+  --color-ink-2: oklch(0.7 0.01 250);
+  --color-ink-3: oklch(0.52 0.012 250);
+
+  --color-bagnino: oklch(0.72 0.09 230);
+  --color-bagnino-dim: oklch(0.32 0.045 230);
+  --color-spiaggino: oklch(0.76 0.09 85);
+  --color-spiaggino-dim: oklch(0.34 0.045 85);
+
+  --color-danger: oklch(0.68 0.13 25);
+  --color-danger-dim: oklch(0.3 0.06 25);
+  --color-ok: oklch(0.72 0.1 155);
+  --color-ok-dim: oklch(0.3 0.05 155);
+}
+
+html {
+  background-color: var(--color-surface-0);
+  color: var(--color-ink-1);
+  font-family: var(--font-sans);
+  /* §9: tabular numerals for times and dates, everywhere by default. */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}

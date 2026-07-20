@@ -221,8 +221,12 @@ class ScheduleAssignmentOut(BaseModel):
 
     Carries the worker's `display_name` so the grid needs no second lookup, but
     never `is_root`: root (Matteo) appears here as an ordinary bagnino — his shifts
-    are real coverage — while his root role stays invisible (§5)."""
+    are real coverage — while his root role stays invisible (§5).
 
+    `id` is the §6 assignments row id — the handle `POST /swaps` names its two
+    sides by (§4), so the grid can open a swap without a second endpoint."""
+
+    id: int
     day: Day
     slot: AssignmentSlot
     role: AssignmentRole
@@ -233,6 +237,7 @@ class ScheduleAssignmentOut(BaseModel):
     @classmethod
     def from_model(cls, assignment: Assignment) -> ScheduleAssignmentOut:
         return cls(
+            id=assignment.id,
             day=assignment.day,
             slot=assignment.slot,
             role=assignment.role,
