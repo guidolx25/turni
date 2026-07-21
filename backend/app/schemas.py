@@ -26,7 +26,15 @@ from app.enums import (
     UserRole,
     WeekStatus,
 )
-from app.models import Assignment, Constraint, SacrificeProposal, SwapRequest, User, Week
+from app.models import (
+    Assignment,
+    AuditLog,
+    Constraint,
+    SacrificeProposal,
+    SwapRequest,
+    User,
+    Week,
+)
 from app.permissions import has_admin_capability, has_root_capability
 from app.scheduling import window_deadline
 from app.solver import PersonalConstraint, SolverResult
@@ -182,6 +190,71 @@ class MeOut(UserOut):
             capabilities=Capabilities.for_user(user),
             ics_token=user.ics_token,
         )
+
+
+class UserCreateIn(BaseModel):
+    """`POST /root/users` body (§5 row 7, §7 `-- root --`).
+
+    `is_root` is structurally absent, exactly as it is from every response model.
+    §5 makes root a single seeded account ("build decision: single account with
+    `is_root` flag ... 5 account rows, not 6"); a second root would be a second
+    holder of the one authority that can create accounts, and no endpoint may
+    mint one. Root-ness is a property of the seed, not of the API.
+
+    `active` is absent too: a created account is active. Deactivation is a PATCH
+    (§5: "the root panel offers deactivate, not delete").
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=64)
+    display_name: str = Field(min_length=1, max_length=128)
+    role: UserRole
+    email: str | None = Field(default=None, max_length=255)
+    is_admin: bool = False
+    language: Language = Language.IT
+    # Bounded like LoginIn so argon2 never sees an unbounded body; the MINIMUM is
+    # enforced in the handler so the failure is a machine code the §9 dictionaries
+    # can render, not pydantic's error list.
+    password: str = Field(max_length=256)
+
+
+class UserUpdateIn(BaseModel):
+    """`PATCH /root/users/{id}` body (§5 row 7).
+
+    A partial patch: an absent field is left alone. `email` distinguishes absent
+    from explicit `null` (clearing an address is a real operation) via
+    `model_fields_set`, so None is not read as "unchanged".
+
+    `is_root`, `username` and `password` are absent by construction: root-ness is
+    never settable (see `UserCreateIn`), the username is the account's identity in
+    the audit log, and a password reset is its own endpoint so that "who reset
+    whose password" is a distinct audit action.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=128)
+    role: UserRole | None = None
+    email: str | None = Field(default=None, max_length=255)
+    is_admin: bool | None = None
+    language: Language | None = None
+    # §5: "Users are never hard-deleted. Deactivation via users.active = false is
+    # the only removal" — and it is immediate, revoking the user's open sessions.
+    active: bool | None = None
+
+
+class PasswordResetIn(BaseModel):
+    """`POST /root/users/{id}/password` body (§5 row 7: "reset passwords").
+
+    No `current_password`: root is not proving it is the account holder — that is
+    the whole point of a reset, and the §7 self-service change on `/me/settings`
+    is where the current password is required.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    new_password: str = Field(max_length=256)
 
 
 class WeekOut(BaseModel):
@@ -342,6 +415,148 @@ class SwapRequestOut(BaseModel):
             created_at=swap.created_at,
             resolved_at=swap.resolved_at,
         )
+
+
+class OverrideIn(BaseModel):
+    """`POST /admin/override` body (§7, §5 "Override locked slots").
+
+    The slot is named by the §6 natural keys — the week by its Monday date, then
+    (day, slot, role) — never by a surrogate assignment id, so an admin can point
+    at a slot the way the schedule grid displays it.
+
+    `assignment_id` is the one exception and is optional: the §6 unique index is
+    scoped to Mon–Fri because H5 seats TWO spiaggini in every weekend slot, so on
+    Sat/Sun the natural key can match two rows and the id says which. Sending it
+    for a weekday is allowed but redundant; sending one that does not match the
+    named (week, day, slot, role) is refused rather than silently preferred.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    week: dt.date
+    day: Day
+    slot: AssignmentSlot
+    role: AssignmentRole
+    user_id: int
+    assignment_id: int | None = None
+
+
+class ViolationOut(BaseModel):
+    """One §2.1 hard rule the overridden week no longer satisfies.
+
+    Data, not prose (§9 renders it): `rule` is "H2", "H3" or "H4", `user_id` the
+    worker it lands on, and `day`/`slot` locate it where the rule is per-day or
+    per-slot. Present in the response because §5's override is deliberately
+    allowed to create these — see `app.override_service` — and the admin must
+    read back what they did.
+    """
+
+    rule: str
+    user_id: int
+    day: Day | None
+    slot: AssignmentSlot | None
+
+
+class OverrideOut(BaseModel):
+    """`POST /admin/override` result: the row as it now stands, who held it
+    before (None when the slot was empty and the row had to be created), and the
+    H2–H4 violations the change left standing."""
+
+    assignment: ScheduleAssignmentOut
+    previous_user_id: int | None
+    new_user_id: int
+    created: bool
+    violations: list[ViolationOut]
+
+
+class AdminConstraintOut(BaseModel):
+    """One worker's constraint as an admin sees it (§7 `GET /admin/constraints`,
+    §5 "View all constraint submissions").
+
+    Carries `user_id` + `user_name` so the panel groups submissions by person
+    without a second lookup. Root's own submissions appear like anyone else's —
+    §5 hides the root ROLE, not the fact that Matteo works and submits — and
+    `is_root` is structurally absent here as it is everywhere.
+    """
+
+    id: int
+    user_id: int
+    user_name: str
+    day: Day
+    slot: ConstraintSlot
+    kind: ConstraintKind
+    note: str | None
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+    @classmethod
+    def from_model(cls, constraint: Constraint) -> AdminConstraintOut:
+        return cls(
+            id=constraint.id,
+            user_id=constraint.user_id,
+            user_name=constraint.user.display_name,
+            day=constraint.day,
+            slot=constraint.slot,
+            kind=constraint.kind,
+            note=constraint.note,
+            created_at=constraint.created_at,
+            updated_at=constraint.updated_at,
+        )
+
+
+class AdminConstraintsOut(BaseModel):
+    """Every submission for one week (§7 `GET /admin/constraints?week=`), with the
+    week's lifecycle state so the panel knows whether the window is still open."""
+
+    week: dt.date
+    status: WeekStatus
+    constraints: list[AdminConstraintOut]
+
+
+class AuditEntryOut(BaseModel):
+    """One §6 `audit_log` row (§7 `GET /admin/audit`, §5 "View audit log").
+
+    §6: "actor_id NULL means a system action (cron solve, 48 h swap expiry,
+    nightly backup) ... There is deliberately no system user row." So the wire
+    format says that outright with `system: true` and a null actor, instead of
+    leaving the reader to interpret a missing name as a lookup failure or a
+    deleted account — which §6 is explicit it never is ("users are never
+    hard-deleted, so a NULL actor_id is never a vanished human").
+    """
+
+    id: int
+    actor_id: int | None
+    actor_name: str | None
+    system: bool
+    action: str
+    entity: str
+    entity_id: int | None
+    payload: dict[str, object] | None
+    created_at: dt.datetime
+
+    @classmethod
+    def from_model(cls, row: AuditLog) -> AuditEntryOut:
+        return cls(
+            id=row.id,
+            actor_id=row.actor_id,
+            actor_name=row.actor.display_name if row.actor is not None else None,
+            system=row.actor_id is None,
+            action=row.action,
+            entity=row.entity,
+            entity_id=row.entity_id,
+            payload=row.payload,
+            created_at=row.created_at,
+        )
+
+
+class AuditPageOut(BaseModel):
+    """A page of the audit log, newest first. `total` is the count matching the
+    filters (not the page), so the panel can paginate without probing."""
+
+    total: int
+    limit: int
+    offset: int
+    entries: list[AuditEntryOut]
 
 
 class ConflictItemOut(BaseModel):

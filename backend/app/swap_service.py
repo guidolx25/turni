@@ -59,6 +59,7 @@ from app.notifications import (
     notify,
 )
 from app.publish_service import write_solver_state
+from app.roles import can_hold
 from app.solve_service import accepted_sacrifice_grants
 from app.solver import FREE_DAYS, SOLVER_DAYS
 from app.visibility import admin_recipients
@@ -289,18 +290,11 @@ def _validated_exchange(db: DbSession, swap: SwapLike) -> tuple[Assignment, Assi
     requester = db.get(User, swap.from_user)
     target = db.get(User, swap.to_user)
     assert requester is not None and target is not None  # FK via the holder check
-    if not _can_hold(requester.role, to_a.role) or not _can_hold(target.role, from_a.role):
+    if not can_hold(requester.role, to_a.role) or not can_hold(target.role, from_a.role):
         raise _invalid(ERROR_SWAP_ROLE_INVALID)
 
     _check_h2_h4(db, week, requester, target, from_a, to_a)
     return from_a, to_a, week
-
-
-def _can_hold(user_role: UserRole, row_role: AssignmentRole) -> bool:
-    """§4: bagnino↔bagnino, spiaggino↔spiaggino; the jolly holds either role."""
-    if user_role is UserRole.JOLLY:
-        return True
-    return user_role.value == row_role.value
 
 
 def _check_h2_h4(

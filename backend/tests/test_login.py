@@ -181,7 +181,7 @@ def test_limiter_query_for_an_unknown_key_does_not_materialise_an_entry() -> Non
 
 
 def attempt(client: TestClient, username: str, password: str) -> Response:
-    return client.post("/auth/login", json={"username": username, "password": password})
+    return client.post("/api/auth/login", json={"username": username, "password": password})
 
 
 def test_login_with_the_correct_password_sets_a_session_cookie(

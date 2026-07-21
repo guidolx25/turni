@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
+from app import audit
+from app.backup import create_backup, prune_backups
 from app.config import settings
 from app.enums import SwapStatus, WeekStatus
 from app.models import SwapRequest, User
@@ -29,6 +32,7 @@ from app.notifications import EVENT_WINDOW_CLOSING_24H, notify
 from app.publish_service import publish_week
 from app.sacrifice_service import open_sacrifice
 from app.scheduling import get_or_create_week, is_submittable, window_deadline
+from app.sessions import purge_expired_sessions
 from app.solve_service import run_solve
 from app.solver import SolverResult, SolverStatus
 from app.swap_service import SWAP_TTL, expire_swap
@@ -122,6 +126,53 @@ def run_window_reminder(db: DbSession, now: dt.datetime) -> int:
     db.commit()
     logger.info("window reminder sent for %s to %d user(s)", target, len(recipients))
     return len(recipients)
+
+
+def run_nightly_maintenance(db: DbSession, now: dt.datetime) -> Path | None:
+    """§11: the nightly housekeeping run — SQLite backup, then session purge.
+
+    Two chores, one fire, because both are "once a day, no user waiting":
+
+    * **Backup** (§11: "nightly `sqlite3 .backup` to the volume, keep 14") — an
+      online-API snapshot plus a prune to the newest `BACKUP_KEEP`. Audited with a
+      NULL actor: §6 says a scheduled job has no human actor and there is
+      deliberately no system user row, and "the backups ran" is exactly the kind
+      of fact an operator later needs to establish from the log.
+    * **Expired sessions** (§6 `sessions`: "expired rows are purged by the nightly
+      job (§11)"). Expiry is already enforced on read, so this is housekeeping,
+      not a security boundary — it just keeps the table from growing forever.
+
+    A failed backup does not skip the purge, and neither raises: `create_backup`
+    swallows and logs its own failures so APScheduler does not retire the job (see
+    `app.backup`). The audit row records the outcome either way — including
+    `"backup": null` for a failure, which is the log entry that lets someone
+    notice backups have been silently failing for a week.
+
+    Returns the snapshot path, or None if it could not be taken.
+    """
+    snapshot = create_backup(now)
+    pruned = prune_backups(settings.backup_dir, settings.backup_keep) if snapshot else []
+    purged = purge_expired_sessions(db, now=now)
+    audit.record(
+        db,
+        None,  # §6: a scheduled job has no human actor
+        audit.ACTION_BACKUP,
+        "database",
+        None,
+        {
+            "backup": str(snapshot) if snapshot is not None else None,
+            "pruned": len(pruned),
+            "sessions_purged": purged,
+        },
+    )
+    db.commit()
+    logger.info(
+        "nightly maintenance complete: backup=%s pruned=%d sessions_purged=%d",
+        snapshot,
+        len(pruned),
+        purged,
+    )
+    return snapshot
 
 
 def expire_stale_swaps(db: DbSession, now: dt.datetime) -> int:

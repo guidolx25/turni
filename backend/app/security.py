@@ -22,6 +22,20 @@ from app.config import settings
 # parameters; pinning our own numbers here would freeze them at today's hardware.
 _hasher = PasswordHasher()
 
+# A floor the spec does not set. It lives HERE, not in a router, because two
+# routes now set passwords — the §7 self-service change on `/me/settings` and the
+# §5 root reset/create on `/root/users` — and a policy that differed between them
+# would mean the weaker route defines the system's real minimum.
+MIN_PASSWORD_LENGTH = 8
+# Machine code, not prose (§9 keeps user-visible strings in the dictionaries).
+# Shared for the same reason as the length: one failure, one key to render.
+ERROR_PASSWORD_TOO_SHORT = "new_password_too_short"
+
+
+def password_too_short(password: str) -> bool:
+    """Is `password` below the shared §7 floor? Pure — the caller raises."""
+    return len(password) < MIN_PASSWORD_LENGTH
+
 
 def hash_password(password: str) -> str:
     """Hash a plaintext password for `users.password_hash` (§6)."""

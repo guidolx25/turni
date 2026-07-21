@@ -29,7 +29,7 @@ NEW_PASSWORD = "una-nuova-password-9876"
 
 
 def login(client: TestClient, username: str, password: str = PASSWORD) -> None:
-    response = client.post("/auth/login", json={"username": username, "password": password})
+    response = client.post("/api/auth/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
 
 
@@ -43,7 +43,7 @@ def test_patch_updates_language_and_email_preferences(
     login(client, user.username)
 
     response = client.patch(
-        "/me/settings",
+        "/api/me/settings",
         json={"language": "en", "email_notifications": False},
     )
 
@@ -60,7 +60,7 @@ def test_patch_is_partial(session: DbSession, client: TestClient) -> None:
     user = create_user(session, "pasha", email="pasha@example.com", language=Language.EN)
     login(client, user.username)
 
-    response = client.patch("/me/settings", json={"email_notifications": False})
+    response = client.patch("/api/me/settings", json={"email_notifications": False})
 
     assert response.status_code == 200
     assert response.json()["email"] == "pasha@example.com"
@@ -78,7 +78,7 @@ def test_the_address_itself_is_not_settable_here(session: DbSession, client: Tes
     user = create_user(session, "pasha", email="pasha@example.com")
     login(client, user.username)
 
-    response = client.patch("/me/settings", json={"email": "attacker@example.com"})
+    response = client.patch("/api/me/settings", json={"email": "attacker@example.com"})
 
     assert response.status_code == 422
     session.refresh(user)
@@ -98,7 +98,7 @@ def test_a_too_short_new_password_is_refused_with_a_renderable_code(
     login(client, user.username)
 
     response = client.patch(
-        "/me/settings",
+        "/api/me/settings",
         json={"current_password": PASSWORD, "new_password": "short"},
     )
 
@@ -112,7 +112,7 @@ def test_a_too_short_new_password_is_refused_with_a_renderable_code(
 def test_invalid_language_is_rejected(session: DbSession, client: TestClient) -> None:
     user = create_worker(session)
     login(client, user.username)
-    assert client.patch("/me/settings", json={"language": "de"}).status_code == 422
+    assert client.patch("/api/me/settings", json={"language": "de"}).status_code == 422
 
 
 # --- privilege containment (§5) ---------------------------------------------
@@ -130,7 +130,7 @@ def test_patch_cannot_escalate_privileges(
     user = create_worker(session)
     login(client, user.username)
 
-    response = client.patch("/me/settings", json={field: value})
+    response = client.patch("/api/me/settings", json={field: value})
 
     assert response.status_code == 422
     session.refresh(user)
@@ -144,14 +144,14 @@ def test_response_never_serializes_is_root(session: DbSession, client: TestClien
     root = create_root(session)
     login(client, root.username)
 
-    response = client.patch("/me/settings", json={"language": "en"})
+    response = client.patch("/api/me/settings", json={"language": "en"})
 
     assert response.status_code == 200
     assert "is_root" not in response.json()
 
 
 def test_patch_requires_authentication(client: TestClient) -> None:
-    assert client.patch("/me/settings", json={"language": "en"}).status_code == 401
+    assert client.patch("/api/me/settings", json={"language": "en"}).status_code == 401
 
 
 # --- password change (§7) ---------------------------------------------------
@@ -163,7 +163,7 @@ def test_password_change_requires_the_current_password(
     user = create_user(session, "pasha", password=PASSWORD)
     login(client, user.username)
 
-    response = client.patch("/me/settings", json={"new_password": NEW_PASSWORD})
+    response = client.patch("/api/me/settings", json={"new_password": NEW_PASSWORD})
 
     assert response.status_code == 422
     assert response.json()["detail"] == "current_password_required"
@@ -178,7 +178,7 @@ def test_password_change_rejects_a_wrong_current_password(
     before = user.password_hash
 
     response = client.patch(
-        "/me/settings",
+        "/api/me/settings",
         json={"current_password": "sbagliata-del-tutto", "new_password": NEW_PASSWORD},
     )
 
@@ -194,7 +194,7 @@ def test_current_password_without_new_password_is_rejected(
     user = create_user(session, "pasha", password=PASSWORD)
     login(client, user.username)
 
-    response = client.patch("/me/settings", json={"current_password": PASSWORD})
+    response = client.patch("/api/me/settings", json={"current_password": PASSWORD})
 
     assert response.status_code == 422
     assert response.json()["detail"] == "new_password_required"
@@ -205,13 +205,13 @@ def test_password_change_takes_effect(session: DbSession, client: TestClient) ->
     login(client, user.username)
 
     response = client.patch(
-        "/me/settings", json={"current_password": PASSWORD, "new_password": NEW_PASSWORD}
+        "/api/me/settings", json={"current_password": PASSWORD, "new_password": NEW_PASSWORD}
     )
     assert response.status_code == 200
 
-    client.post("/auth/logout")
+    client.post("/api/auth/logout")
     assert (
-        client.post("/auth/login", json={"username": "pasha", "password": PASSWORD}).status_code
+        client.post("/api/auth/login", json={"username": "pasha", "password": PASSWORD}).status_code
         == 401
     )
     login(client, "pasha", NEW_PASSWORD)
@@ -230,12 +230,12 @@ def test_password_change_revokes_other_sessions_but_not_the_callers(
     assert len(session.scalars(select(SessionRow)).all()) == 2
 
     response = changer.patch(
-        "/me/settings", json={"current_password": PASSWORD, "new_password": NEW_PASSWORD}
+        "/api/me/settings", json={"current_password": PASSWORD, "new_password": NEW_PASSWORD}
     )
     assert response.status_code == 200
 
-    assert changer.get("/me").status_code == 200
-    assert other.get("/me").status_code == 401
+    assert changer.get("/api/me").status_code == 200
+    assert other.get("/api/me").status_code == 401
     assert len(session.scalars(select(SessionRow)).all()) == 1
 
 
@@ -244,7 +244,10 @@ def test_password_change_is_audit_logged(session: DbSession, client: TestClient)
     user = create_user(session, "pasha", password=PASSWORD)
     login(client, user.username)
 
-    client.patch("/me/settings", json={"current_password": PASSWORD, "new_password": NEW_PASSWORD})
+    client.patch(
+        "/api/me/settings",
+        json={"current_password": PASSWORD, "new_password": NEW_PASSWORD},
+    )
 
     rows = session.scalars(select(AuditLog).where(AuditLog.action == "credential")).all()
     assert len(rows) == 1
@@ -262,9 +265,9 @@ def test_ics_token_regeneration_replaces_the_credential(
 ) -> None:
     user = create_worker(session)
     login(client, user.username)
-    before = client.get("/me").json()["ics_token"]
+    before = client.get("/api/me").json()["ics_token"]
 
-    response = client.post("/me/ics-token")
+    response = client.post("/api/me/ics-token")
 
     assert response.status_code == 200
     after = response.json()["ics_token"]
@@ -281,11 +284,11 @@ def test_old_ics_token_stops_resolving_after_regeneration(
     login(client, user.username)
     old = user.ics_token
 
-    client.post("/me/ics-token")
+    client.post("/api/me/ics-token")
 
     # 404 `feed_not_found` is the ICS router's single failure code (it must not
     # distinguish "wrong token" from "no such feed").
-    stale = client.get("/export/ics", params={"token": old})
+    stale = client.get("/api/export/ics", params={"token": old})
     assert stale.status_code == 404
     assert stale.json()["detail"] == "feed_not_found"
 
@@ -294,7 +297,7 @@ def test_ics_regeneration_is_audit_logged(session: DbSession, client: TestClient
     user = create_worker(session)
     login(client, user.username)
 
-    client.post("/me/ics-token")
+    client.post("/api/me/ics-token")
 
     rows = session.scalars(select(AuditLog).where(AuditLog.action == "credential")).all()
     assert len(rows) == 1
@@ -307,4 +310,4 @@ def test_ics_regeneration_is_audit_logged(session: DbSession, client: TestClient
 
 
 def test_ics_regeneration_requires_authentication(client: TestClient) -> None:
-    assert client.post("/me/ics-token").status_code == 401
+    assert client.post("/api/me/ics-token").status_code == 401

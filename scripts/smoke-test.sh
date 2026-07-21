@@ -7,7 +7,7 @@
 # calendar token. It deliberately does NOT solve, publish, or write anything.
 #
 # Usage:
-#   scripts/smoke-test.sh https://turni.fly.dev worker_username 'password'
+#   scripts/smoke-test.sh https://turni.example.northflank.app worker_username 'password'
 #
 # Exit 0 = green. Any failure exits non-zero with the reason.
 set -euo pipefail
@@ -25,9 +25,15 @@ fail() { printf '  FAIL %s\n' "$1" >&2; exit 1; }
 printf 'Smoke test against %s\n' "$BASE"
 
 # --- 1. the app is up (§11 health endpoint) --------------------------------
-code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/healthz")"
+# Outside /api on purpose (§7 v1.11): it is infrastructure, and the host's probe
+# points at it. Asserted as JSON so a fallback regression that served the SPA
+# shell here — a 200 that means nothing — cannot pass.
+read -r code ct <<<"$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' "$BASE/healthz")"
 [ "$code" = "200" ] || fail "/healthz returned $code"
-pass "/healthz is 200"
+case "$ct" in
+  application/json*) pass "/healthz is a JSON 200" ;;
+  *) fail "/healthz returned content-type $ct, expected application/json" ;;
+esac
 
 # --- 2. the frontend is served by the same origin (§9 single deployable) ----
 html="$(curl -sS "$BASE/")"
@@ -38,8 +44,38 @@ grep -qi '<div id="root"' <<<"$html" || fail "/ did not serve the SPA shell"
 grep -qi '<html lang="it"' <<<"$html" || fail "/ did not serve lang=\"it\""
 pass "/ serves the SPA with the expected default language"
 
+# §7 v1.11: the API is under /api, so a client route and an endpoint can no
+# longer be the same URL. These three assertions are that split, end to end on
+# the deployed instance — the halves are checked with no Accept header at all,
+# because routing must not depend on one.
+
+# Deep links / refreshes. Each of these was ambiguous before the prefix: a client
+# route sharing a name with a real endpoint.
+for route in /swaps /constraints /notifications; do
+  deep="$(curl -sS "$BASE$route")"
+  grep -qi '<div id="root"' <<<"$deep" || fail "$route did not serve the SPA shell"
+done
+pass "deep links to /swaps, /constraints and /notifications serve the SPA shell"
+
+# The endpoint of the same name, now unambiguously under /api. 401 (no session)
+# rather than 200: it reached the API's auth, not the static handler.
+ct="$(curl -sS -o /dev/null -w '%{content_type}' "$BASE/api/swaps")"
+case "$ct" in
+  application/json*) pass "/api/swaps reaches the API" ;;
+  *) fail "/api/swaps returned content-type $ct, expected application/json" ;;
+esac
+
+# An unknown path under /api keeps the API's JSON error shape. HTML here shows up
+# in a client as a parse error, not as the 404 it is.
+read -r code ct <<<"$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' "$BASE/api/nonexistent")"
+[ "$code" = "404" ] || fail "/api/nonexistent returned $code, expected 404"
+case "$ct" in
+  application/json*) pass "an unknown /api path is a JSON 404" ;;
+  *) fail "/api/nonexistent returned content-type $ct, expected application/json" ;;
+esac
+
 # --- 3. unauthenticated access is refused (§5/§7) --------------------------
-code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/me")"
+code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/me")"
 [ "$code" = "401" ] || fail "/me without a session returned $code, expected 401"
 pass "/me refuses an anonymous caller"
 
@@ -47,12 +83,12 @@ pass "/me refuses an anonymous caller"
 code="$(curl -sS -o /dev/null -w '%{http_code}' -c "$JAR" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" \
-  "$BASE/auth/login")"
+  "$BASE/api/auth/login")"
 [ "$code" = "200" ] || fail "login returned $code"
 grep -q 'turni_session' "$JAR" || fail "login set no session cookie"
 pass "login succeeds and sets a session cookie"
 
-me="$(curl -sS -b "$JAR" "$BASE/me")"
+me="$(curl -sS -b "$JAR" "$BASE/api/me")"
 
 # --- 5. §5/§6: the two things that must never leak -------------------------
 grep -q '"is_root"' <<<"$me" && fail "/me leaked is_root (§5)"
@@ -62,18 +98,18 @@ pass "/me does not serialize is_root"
 grep -q '"ics_token"' <<<"$me" || fail "/me is missing the caller's own ics_token"
 pass "/me carries the caller's own ics_token"
 
-weeks="$(curl -sS -b "$JAR" "$BASE/weeks")"
+weeks="$(curl -sS -b "$JAR" "$BASE/api/weeks")"
 grep -q '"is_root"' <<<"$weeks" && fail "/weeks leaked is_root (§5)"
 pass "/weeks does not leak is_root"
 
 # --- 6. §5: root is invisible to a non-root caller -------------------------
 # A plain worker must be refused outright by the root surface — not shown a
 # filtered list, refused.
-code="$(curl -sS -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/root/users")"
+code="$(curl -sS -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/root/users")"
 if [ "$code" = "200" ]; then
   # The caller IS root (a legitimate way to run this). Then the listing is
   # allowed, but must still never serialize the flag itself.
-  users="$(curl -sS -b "$JAR" "$BASE/root/users")"
+  users="$(curl -sS -b "$JAR" "$BASE/api/root/users")"
   grep -q '"is_root"' <<<"$users" && fail "/root/users leaked is_root (§5)"
   grep -q '"ics_token"' <<<"$users" && fail "/root/users leaked another user's ics_token"
   pass "/root/users (as root) leaks neither is_root nor a feed token"
@@ -83,13 +119,13 @@ else
 fi
 
 # --- 7. the calendar feed rejects a bad credential (§7) --------------------
-code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/export/ics?token=definitely-not-a-real-token")"
+code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/export/ics?token=definitely-not-a-real-token")"
 [ "$code" = "404" ] || fail "/export/ics with a bad token returned $code, expected 404"
 pass "/export/ics refuses an unknown token"
 
 # --- 8. logout ends the session --------------------------------------------
-curl -sS -o /dev/null -b "$JAR" -c "$JAR" -X POST "$BASE/auth/logout"
-code="$(curl -sS -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/me")"
+curl -sS -o /dev/null -b "$JAR" -c "$JAR" -X POST "$BASE/api/auth/logout"
+code="$(curl -sS -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/me")"
 [ "$code" = "401" ] || fail "/me after logout returned $code, expected 401"
 pass "logout invalidates the session"
 

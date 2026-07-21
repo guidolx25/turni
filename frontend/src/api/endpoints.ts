@@ -1,6 +1,9 @@
 /** Typed endpoint functions for the §7 surface. */
 import { request } from './client'
 import type {
+  AdminConstraintsOut,
+  AuditPageOut,
+  AuditQuery,
   ConstraintIn,
   ConstraintOut,
   IcsTokenOut,
@@ -9,11 +12,18 @@ import type {
   MeOut,
   MeSettingsIn,
   NotificationOut,
+  OverrideIn,
+  OverrideOut,
+  PasswordResetIn,
   SacrificeProposalOut,
   ScheduleOut,
+  SolveResultOut,
   SwapCreateIn,
   SwapRequestOut,
+  UserAdminOut,
+  UserCreateIn,
   UserOut,
+  UserUpdateIn,
   WeekOut,
 } from './types'
 
@@ -77,6 +87,40 @@ export const notificationsApi = {
   // §7: `ids` omitted marks all of the caller's rows read.
   markRead: (body: MarkReadIn = {}) =>
     request<undefined>('/notifications/read', { method: 'POST', body }),
+}
+
+export const adminApi = {
+  /**
+   * §3.2 "Generate now": runs the solver AND closes the submission window early.
+   * §7 keeps it distinct from publish — an INFEASIBLE solve can never publish,
+   * and the manual path reviews the solved schedule first.
+   */
+  solve: (week: string) =>
+    request<SolveResultOut>(`/admin/solve?week=${encodeURIComponent(week)}`, { method: 'POST' }),
+  /** §3.3: lock a `solved` week — makes it visible and fans out (§10). */
+  publish: (week: string) =>
+    request<WeekOut>(`/admin/publish?week=${encodeURIComponent(week)}`, { method: 'POST' }),
+  /** §5/§3.4: unilaterally change who holds a locked slot; notifies both workers. */
+  override: (body: OverrideIn) => request<OverrideOut>('/admin/override', { method: 'POST', body }),
+  constraints: (week: string) =>
+    request<AdminConstraintsOut>(`/admin/constraints?week=${encodeURIComponent(week)}`),
+  audit: ({ limit, offset, action, entity }: AuditQuery) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (action) params.set('action', action)
+    if (entity) params.set('entity', entity)
+    return request<AuditPageOut>(`/admin/audit?${params.toString()}`)
+  },
+}
+
+export const rootApi = {
+  list: () => request<UserAdminOut[]>('/root/users'),
+  create: (body: UserCreateIn) => request<UserAdminOut>('/root/users', { method: 'POST', body }),
+  // §5: users are never hard-deleted — `{active: false}` through this same PATCH
+  // is the only removal, so there is deliberately no `remove` here to call.
+  update: (id: number, body: UserUpdateIn) =>
+    request<UserAdminOut>(`/root/users/${String(id)}`, { method: 'PATCH', body }),
+  resetPassword: (id: number, body: PasswordResetIn) =>
+    request<unknown>(`/root/users/${String(id)}/password`, { method: 'POST', body }),
 }
 
 export const sacrificeApi = {

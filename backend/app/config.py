@@ -4,16 +4,37 @@ from __future__ import annotations
 
 import datetime as dt
 import enum
+from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# §7 (v1.11): every API route is mounted under this prefix, and nothing else is.
+# Structural, not configurable — the frontend, the vite dev proxy and the SPA
+# fallback all encode the same string, so making it an env var would let a
+# deployment desynchronise the two halves of one application.
+API_PREFIX = "/api"
 
 
 class Environment(enum.StrEnum):
-    """Deployment environment. Only `dev` may fall back to insecure defaults."""
+    """Deployment environment. Only `dev` and `test` may relax production rules.
+
+    `PROD` is the default and the fallback for anything unrecognised — see
+    `_coerce_env`. Relaxed behaviour must be *asked for*; it is never inherited
+    from a missing, misspelled or empty variable.
+    """
 
     DEV = "dev"
+    TEST = "test"
     PROD = "prod"
+
+
+# The only two spellings that buy an insecure default. Everything else — unset,
+# empty, "production", "Prod ", a typo — resolves to PROD.
+_RELAXED_ENVIRONMENTS = {
+    Environment.DEV.value: Environment.DEV,
+    Environment.TEST.value: Environment.TEST,
+}
 
 
 # Publicly known, therefore usable only when ENV=dev. Prod refuses to boot
@@ -30,12 +51,22 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    env: Environment = Environment.DEV
+    # Defaults to PROD, deliberately. The insecure-default path is opt-in: a
+    # deploy that forgets to set ENV gets the hardened behaviour and, without a
+    # SECRET_KEY, refuses to boot. The previous default (DEV) meant the reverse —
+    # every rule below was gated on a variable nothing in the deployment set, so
+    # production silently signed real cookies with the published dev constant.
+    env: Environment = Environment.PROD
 
     # Empty means "unset": resolved below to the dev fallback, or fatal in prod.
     secret_key: str = ""
     # spec §11: SQLite on a persistent volume in production; a local file in dev.
     database_url: str = "sqlite:///./turni.db"
+    # §9/§11: the directory holding the built frontend (`npm run build` output).
+    # Unset means "do not serve a frontend", which is the dev and test default:
+    # in dev the Vite server serves the SPA and proxies the API here, so mounting
+    # a stale `dist/` would shadow it. The Dockerfile sets this to /app/static.
+    static_dir: Path | None = None
     # spec §4: ships false in v1; the state machine exists behind it.
     #
     # DO NOT enable in v1. §13 defers the admin-approval SURFACE, so `pending_admin`
@@ -72,16 +103,55 @@ class Settings(BaseSettings):
     login_max_attempts: int = 10
     login_window_seconds: int = 15 * 60
 
+    # --- logging (§11 "structured logs") ---
+    log_level: str = "INFO"
+    # JSON on by default: §11 asks for structured logs, and the deployment ships
+    # them to a collector. A developer at a terminal sets LOG_JSON=false.
+    log_json: bool = True
+
+    # --- nightly SQLite backup (§11: "nightly `sqlite3 .backup` ... keep 14") ---
+    # Relative to the process CWD by default; §11 puts it on the persistent volume
+    # in production, so the deployment sets BACKUP_DIR explicitly.
+    backup_dir: Path = Path("backups")
+    # §11 names the retention outright.
+    backup_keep: int = 14
+    # 03:30 Europe/Rome: nowhere near the 17:00 solve/reminder crons (§3), and in
+    # the quiet part of a beach establishment's day.
+    backup_hour: int = 3
+    backup_minute: int = 30
+
     # --- ICS export slot hours (§7 /export/ics, v1.7) ---
     # Europe/Rome wall-clock bounds of the two §1 slots, used only to give the
-    # calendar VEVENTs concrete times. Deploy-time config per §11 (env
-    # ICS_AM_START etc., "HH:MM"); the defaults are PROVISIONAL — the spec names
-    # the slots but not their opening hours, so the real values are set at
-    # deployment, not here.
-    ics_am_start: dt.time = dt.time(9, 0)
+    # calendar VEVENTs concrete times. Still deploy-time config per §11 (env
+    # ICS_AM_START etc., "HH:MM"), but these are the establishment's REAL hours
+    # as of v1.10 — no longer placeholders. They are what appears in each
+    # worker's phone calendar, so a wrong value here is wrong for everyone.
+    # Nothing in §2 or §8 reads them: changing them moves only what a subscribed
+    # calendar displays.
+    ics_am_start: dt.time = dt.time(8, 0)
     ics_am_end: dt.time = dt.time(14, 0)
     ics_pm_start: dt.time = dt.time(14, 0)
-    ics_pm_end: dt.time = dt.time(19, 0)
+    ics_pm_end: dt.time = dt.time(20, 0)
+
+    @field_validator("env", mode="before")
+    @classmethod
+    def _coerce_env(cls, value: object) -> object:
+        """Resolve anything that is not an explicit `dev`/`test` to PROD.
+
+        Pydantic's own enum parsing would raise on an unrecognised value. That
+        is the wrong failure: `ENV=production` or `ENV=prd` in a host's config UI
+        would crash the container with a validation error, and an operator under
+        pressure fixes a crash by removing the variable — which, before this
+        default was inverted, was the insecure state. Coercing instead means the
+        only way to reach a relaxed environment is to name one exactly.
+        """
+        if value is None:
+            return Environment.PROD
+        if isinstance(value, Environment):
+            return value
+        if isinstance(value, str):
+            return _RELAXED_ENVIRONMENTS.get(value.strip().lower(), Environment.PROD)
+        return Environment.PROD
 
     @model_validator(mode="after")
     def _resolve_secret_key(self) -> Settings:
@@ -106,9 +176,14 @@ class Settings(BaseSettings):
 
     @property
     def cookie_secure(self) -> bool:
-        """§7: the session cookie is `Secure` everywhere except local dev, where
-        there is no TLS to carry it."""
-        return self.env is not Environment.DEV
+        """§7: the session cookie is `Secure` in production.
+
+        Stated as "is PROD" rather than "is not DEV" so that a new relaxed
+        environment cannot inherit `Secure` by accident: `test` drives the app
+        over plain http via TestClient, where a `Secure` cookie is set but never
+        sent back, and every auth test would fail for a reason unrelated to auth.
+        """
+        return self.env is Environment.PROD
 
 
 settings = Settings()

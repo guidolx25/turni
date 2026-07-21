@@ -9,6 +9,17 @@
 import type { TranslationKey } from '../i18n/it'
 import { it } from '../i18n/it'
 
+/**
+ * §7 (v1.11): every API route is namespaced under this prefix.
+ *
+ * It exists so the API and the §9 client routes cannot collide: `/swaps` is a
+ * react-router view, `/api/swaps` is the endpoint. Endpoint functions pass
+ * spec-shaped paths (`/me`, `/swaps/{id}/accept`) and `request` prepends this —
+ * so this is the one place the prefix appears in the frontend, and the only
+ * place it should. A `fetch` that bypasses `request` bypasses this too.
+ */
+export const API_BASE = '/api'
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -61,7 +72,7 @@ async function parseCode(response: Response): Promise<string> {
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, skipUnauthorizedHandler = false } = options
-  const response = await fetch(path, {
+  const response = await fetch(`${API_BASE}${path}`, {
     method,
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
     body: body !== undefined ? JSON.stringify(body) : undefined,

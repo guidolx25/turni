@@ -78,7 +78,7 @@ def _future_monday(weeks_ahead: int = 2) -> dt.date:
 
 
 def login(client: TestClient, username: str) -> None:
-    resp = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+    resp = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
@@ -90,7 +90,7 @@ def _hard(session: DbSession, user_id: int, week: Week, day: Day, slot=Constrain
 
 
 def _solve(client: TestClient, monday: dt.date):
-    return client.post("/admin/solve", params={"week": monday.isoformat()})
+    return client.post("/api/admin/solve", params={"week": monday.isoformat()})
 
 
 def _force_proposal(
@@ -221,7 +221,7 @@ def test_h3_hard_friday_request_leaves_the_week_unpublishable_until_answered(
     login(client, "mattia")
     assert _solve(client, monday).json()["status"] == "infeasible"
 
-    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 409, resp.text
     assert resp.json()["detail"] == ERROR_SACRIFICE_PENDING
     session.expire_all()
@@ -272,7 +272,7 @@ def test_h3_friday_conflict_with_infeasible_probe_escalates(
 
     # §3.3: nothing to publish — no proposal is pending, and no solver rows exist.
     assert session.scalars(select(Assignment).where(Assignment.week_id == week.id)).all() == []
-    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 409, resp.text
     assert resp.json()["detail"] != ERROR_SACRIFICE_PENDING, (
         "refused for having no feasible schedule, not for an open conversation"
@@ -369,7 +369,7 @@ def test_decline_escalation_carries_minimal_core(client: TestClient, session: Db
     week, proposal = _force_proposal(session, roster, monday, worker="pasha", day=Day.THU)
 
     login(client, "pasha")
-    assert client.post(f"/sacrifice/{proposal.id}/decline").status_code == 200
+    assert client.post(f"/api/sacrifice/{proposal.id}/decline").status_code == 200
 
     session.refresh(week)
     _assert_minimal_core_escalation(
@@ -430,7 +430,7 @@ def test_accept_re_solves_pinned_and_publishes(client: TestClient, session: DbSe
     _week, proposal = _force_proposal(session, roster, monday, worker="pasha", day=Day.THU)
 
     login(client, "pasha")
-    resp = client.post(f"/sacrifice/{proposal.id}/accept")
+    resp = client.post(f"/api/sacrifice/{proposal.id}/accept")
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "accepted"
 
@@ -438,7 +438,7 @@ def test_accept_re_solves_pinned_and_publishes(client: TestClient, session: DbSe
     assert week is not None and week.status is WeekStatus.LOCKED  # published
 
     login(client, "pasha")
-    grid = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    grid = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
     pasha_thu = [
         a for a in grid["assignments"] if a["user_id"] == roster["pasha"].id and a["day"] == "thu"
     ]
@@ -470,7 +470,7 @@ def test_decline_escalates_to_admin_without_publishing(
     _week, proposal = _force_proposal(session, roster, monday, worker="pasha", day=Day.THU)
 
     login(client, "pasha")
-    resp = client.post(f"/sacrifice/{proposal.id}/decline")
+    resp = client.post(f"/api/sacrifice/{proposal.id}/decline")
     assert resp.status_code == 200
     assert resp.json()["status"] == "declined"
 
@@ -507,8 +507,8 @@ def test_only_target_worker_may_act(client: TestClient, session: DbSession) -> N
     _week, proposal = _force_proposal(session, roster, monday, worker="pasha", day=Day.THU)
 
     login(client, "amir")  # not the target
-    assert client.post(f"/sacrifice/{proposal.id}/accept").status_code == 404
-    assert client.post(f"/sacrifice/{proposal.id}/decline").status_code == 404
+    assert client.post(f"/api/sacrifice/{proposal.id}/accept").status_code == 404
+    assert client.post(f"/api/sacrifice/{proposal.id}/decline").status_code == 404
 
     session.expire_all()
     proposal = session.get(SacrificeProposal, proposal.id)
@@ -522,25 +522,25 @@ def test_cannot_resolve_twice(client: TestClient, session: DbSession) -> None:
     _week, proposal = _force_proposal(session, roster, monday, worker="pasha", day=Day.THU)
 
     login(client, "pasha")
-    assert client.post(f"/sacrifice/{proposal.id}/accept").status_code == 200
-    resp = client.post(f"/sacrifice/{proposal.id}/accept")
+    assert client.post(f"/api/sacrifice/{proposal.id}/accept").status_code == 200
+    resp = client.post(f"/api/sacrifice/{proposal.id}/accept")
     assert resp.status_code == 409
     assert resp.json()["detail"] == "sacrifice_already_resolved"
     # A decline after an accept is refused too — not just a repeated accept.
-    resp = client.post(f"/sacrifice/{proposal.id}/decline")
+    resp = client.post(f"/api/sacrifice/{proposal.id}/decline")
     assert resp.status_code == 409
     assert resp.json()["detail"] == "sacrifice_already_resolved"
 
 
 def test_sacrifice_requires_auth(client: TestClient, session: DbSession) -> None:
-    assert client.post("/sacrifice/1/accept").status_code == 401
-    assert client.post("/sacrifice/1/decline").status_code == 401
+    assert client.post("/api/sacrifice/1/accept").status_code == 401
+    assert client.post("/api/sacrifice/1/decline").status_code == 401
 
 
 def test_unknown_proposal_is_404(client: TestClient, session: DbSession) -> None:
     create_full_roster(session)
     login(client, "pasha")
-    assert client.post("/sacrifice/9999/accept").status_code == 404
+    assert client.post("/api/sacrifice/9999/accept").status_code == 404
 
 
 # --- audit trail (make audit.py truthful) -----------------------------------
@@ -559,7 +559,7 @@ def test_sacrifice_accept_and_solve_write_audit_rows(
     assert solve_rows, "the solve must be audited"
 
     login(client, "pasha")
-    resp = client.post(f"/sacrifice/{proposal.id}/accept")
+    resp = client.post(f"/api/sacrifice/{proposal.id}/accept")
     assert resp.status_code == 200, resp.text
 
     rows = session.scalars(
@@ -580,7 +580,7 @@ def test_decline_writes_a_decline_audit_row(client: TestClient, session: DbSessi
     _week, proposal = _force_proposal(session, roster, monday, worker="pasha", day=Day.THU)
 
     login(client, "pasha")
-    assert client.post(f"/sacrifice/{proposal.id}/decline").status_code == 200
+    assert client.post(f"/api/sacrifice/{proposal.id}/decline").status_code == 200
 
     rows = session.scalars(
         select(AuditLog).where(
@@ -688,7 +688,7 @@ def test_decline_then_resolve_does_not_re_offer_declined_worker(
     proposal = _open_real_friday_proposal(client, session, roster, monday)
 
     login(client, "pasha")
-    assert client.post(f"/sacrifice/{proposal.id}/decline").status_code == 200
+    assert client.post(f"/api/sacrifice/{proposal.id}/decline").status_code == 200
 
     session.expire_all()
     week = session.scalar(select(Week).where(Week.monday_date == monday))
@@ -760,7 +760,7 @@ def test_accepted_then_infeasible_resolve_does_not_re_offer_accepted_worker(
     _hard(session, roster["mattia"].id, week, Day.FRI)
 
     login(client, "pasha")
-    assert client.post(f"/sacrifice/{proposal.id}/accept").status_code == 200
+    assert client.post(f"/api/sacrifice/{proposal.id}/accept").status_code == 200
 
     session.expire_all()
     proposal = session.get(SacrificeProposal, proposal.id)
@@ -812,7 +812,8 @@ def test_accepted_grant_of_record_survives_a_later_resolve(
 
     _hard(session, roster["mattia"].id, week, Day.FRI)  # the competing edit
     login(client, "pasha")
-    assert client.post(f"/sacrifice/{proposal.id}/accept").status_code == 200  # infeasible accept
+    # infeasible accept
+    assert client.post(f"/api/sacrifice/{proposal.id}/accept").status_code == 200
 
     # The competing edit is withdrawn (it was transient): the week is back to the
     # exact conflict Pasha's accepted grant resolves.
@@ -844,7 +845,7 @@ def test_accepted_grant_of_record_survives_a_later_resolve(
     assert fri_rows == [], "the granted Friday free day must hold on a plain re-solve"
     # And the week now publishes — the admin path out of the race is a re-solve,
     # not an override.
-    assert client.post("/admin/publish", params={"week": monday.isoformat()}).status_code == 200
+    assert client.post("/api/admin/publish", params={"week": monday.isoformat()}).status_code == 200
 
 
 # --- degenerate roster: no visible admin to escalate TO ----------------------

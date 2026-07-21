@@ -15,15 +15,21 @@ tests assert against.
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 
+from app.config import API_PREFIX
 from app.deps import CurrentAdmin, CurrentRoot, CurrentWorker
 from app.routers import auth, root
 
 probe_app = FastAPI(title="probe")
 
-probe_app.include_router(auth.router)
-probe_app.include_router(root.router)
+# Mirrors `app.main.create_app`: the real routers go under §7's /api prefix, so
+# the probes exercise the same URLs the frontend will call. The /probe/* routes
+# below stay at the root — they are test scaffolding, not API surface.
+_api = APIRouter(prefix=API_PREFIX)
+_api.include_router(auth.router)
+_api.include_router(root.router)
+probe_app.include_router(_api)
 
 
 @probe_app.get("/probe/worker")

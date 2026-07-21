@@ -24,13 +24,14 @@ Set as secrets:
 
 | Variable | Notes |
 |---|---|
-| `SECRET_KEY` | Required. The app refuses to start in production without it. Generate: `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `SECRET_KEY` | Required, and enforced: the app refuses to start unless `ENV` is explicitly `dev` or `test`. Generate: `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | `RESEND_API_KEY` | Optional. Unset ⇒ email is silently skipped and only in-app notifications fire (§10). Nothing breaks |
 
 Set as plain env:
 
 | Variable | Value |
 |---|---|
+| `ENV` | `prod`. The image already sets it, and leaving it unset is equally safe — see below |
 | `DATABASE_URL` | `sqlite:////data/turni.db` |
 | `BACKUP_DIR` | `/data/backups` |
 | `STATIC_DIR` | `/app/static` |
@@ -38,6 +39,23 @@ Set as plain env:
 | `RESEND_FROM` | A verified sender on your Resend domain |
 | `FORWARDED_ALLOW_IPS` | **The proxy's address — never `*`.** See below |
 | `ICS_AM_START` / `ICS_AM_END` / `ICS_PM_START` / `ICS_PM_END` | Only if the hours change. The defaults are the real ones — AM `08:00`–`14:00`, PM `14:00`–`20:00` Europe/Rome — so you can leave these unset |
+
+### `ENV` fails closed
+
+`ENV` defaults to `prod`, and anything that is not exactly `dev` or `test` —
+unset, empty, `production`, a typo — resolves to `prod` as well. In that state
+`SECRET_KEY` is mandatory and the session cookie is marked `Secure`.
+
+This is inverted from the obvious design on purpose. It used to default to `dev`,
+which meant every production rule hung off a variable nothing in the deployment
+set: the container ran with a non-`Secure` session cookie and signed real cookies
+with `DEV_INSECURE_SECRET_KEY`, a constant published in this repository. The
+insecure path is now the one you have to ask for by name.
+
+The practical consequence when deploying: a missing or misspelled `SECRET_KEY`
+is a **boot failure**, not a silent downgrade. If the container exits
+immediately, read the logs — `SECRET_KEY is required when ENV=prod` is the
+expected message and the fix is the secret, never setting `ENV=dev`.
 
 ### `FORWARDED_ALLOW_IPS` — read this one
 
@@ -72,17 +90,26 @@ Northflank fronts services with its own proxy, so `FORWARDED_ALLOW_IPS` needs
 the internal peer address — take it from the logs after the first request rather
 than guessing.
 
-## Fly.io
+### URL layout
 
-`fly.toml` in the repo root is a ready-made config for this shape (single
-machine, `turni_data` volume at `/data`, health check, autoscaling off).
+One origin serves two things, split by prefix (§7 v1.11):
 
-```bash
-fly launch --no-deploy          # claims the app name, keeps the committed fly.toml
-fly volumes create turni_data --size 1 --region fra
-fly secrets set SECRET_KEY="…" RESEND_API_KEY="…"
-fly deploy
-```
+| Path | Served by |
+|---|---|
+| `/api/*` | The API. Anything unmatched under it is a JSON 404 |
+| `/healthz` | The health endpoint — infrastructure, deliberately outside `/api` |
+| `/assets/*` | Hashed frontend bundles |
+| everything else | The SPA shell; the client router reads the URL |
+
+The prefix is why nothing here needs a rule about `Accept` headers, cookies or
+path rewriting: `/swaps` is a page and `/api/swaps` is an endpoint, and no
+component in the request path has to infer which was meant. If you put a CDN or
+WAF in front, the only requirement is that it forwards paths unchanged.
+
+The calendar feed is API surface and lives under the prefix —
+`/api/export/ics?token=…`. It is the one API URL a worker handles directly
+(Settings shows it, they paste it into a calendar app), so it is worth knowing it
+moved: any feed URL copied before v1.11 is dead and must be re-copied.
 
 ## First run
 
@@ -93,7 +120,7 @@ exists at runtime.
 Then seed the accounts (§5: no public signup; root seeds them):
 
 ```bash
-# Northflank: use the service shell. Fly: fly ssh console.
+# Northflank: use the service shell.
 cd /app && uv run python -m app.seed
 ```
 
@@ -113,7 +140,8 @@ caller and that no response leaks `is_root` or another user's calendar token.
 
 ## Backups
 
-The nightly job writes `turni-YYYYMMDD-HHMMSS.db` into `BACKUP_DIR` using
+The nightly job writes `turni-YYYYMMDDTHHMMSSZ.db` (UTC, so the names sort
+chronologically) into `BACKUP_DIR` using
 SQLite's online backup API (not a file copy, which can tear under a concurrent
 write) and prunes to the 14 most recent (§11).
 

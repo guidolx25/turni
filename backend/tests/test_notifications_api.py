@@ -20,7 +20,7 @@ pytestmark = pytest.mark.phase3
 
 
 def login(client: TestClient, username: str) -> None:
-    resp = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+    resp = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
@@ -32,8 +32,8 @@ def _note(session: DbSession, user_id: int, event: str = "schedule_published") -
 
 
 def test_notifications_require_auth(client: TestClient) -> None:
-    assert client.get("/notifications").status_code == 401
-    assert client.post("/notifications/read", json={}).status_code == 401
+    assert client.get("/api/notifications").status_code == 401
+    assert client.post("/api/notifications/read", json={}).status_code == 401
 
 
 def test_lists_only_own_notifications(client: TestClient, session: DbSession) -> None:
@@ -43,7 +43,7 @@ def test_lists_only_own_notifications(client: TestClient, session: DbSession) ->
     _note(session, amir.id, "swap_requested")
 
     login(client, "pasha")
-    body = client.get("/notifications").json()
+    body = client.get("/api/notifications").json()
     assert [n["event_type"] for n in body] == ["schedule_published"]
     assert all("is_root" not in n for n in body)
 
@@ -54,7 +54,7 @@ def test_mark_all_read(client: TestClient, session: DbSession) -> None:
     _note(session, pasha.id)
 
     login(client, "pasha")
-    assert client.post("/notifications/read", json={}).status_code == 204
+    assert client.post("/api/notifications/read", json={}).status_code == 204
     rows = session.scalars(select(Notification).where(Notification.user_id == pasha.id)).all()
     assert all(n.read for n in rows)
 
@@ -65,7 +65,7 @@ def test_mark_specific_ids_read(client: TestClient, session: DbSession) -> None:
     b = _note(session, pasha.id)
 
     login(client, "pasha")
-    client.post("/notifications/read", json={"ids": [a.id]})
+    client.post("/api/notifications/read", json={"ids": [a.id]})
     session.expire_all()
     assert session.get(Notification, a.id).read is True
     assert session.get(Notification, b.id).read is False
@@ -80,6 +80,6 @@ def test_cannot_mark_another_users_notification_read(
     other = _note(session, amir.id)
 
     login(client, "pasha")
-    client.post("/notifications/read", json={"ids": [other.id]})
+    client.post("/api/notifications/read", json={"ids": [other.id]})
     session.expire_all()
     assert session.get(Notification, other.id).read is False  # untouched

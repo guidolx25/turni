@@ -36,6 +36,11 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 # Set before `app.config` is imported anywhere: protects the dev database.
 _SCRATCH = Path(tempfile.mkdtemp(prefix="turni-test-session-"))
 os.environ["DATABASE_URL"] = f"sqlite:///{_SCRATCH / 'session.db'}"
+# §11: ENV defaults to `prod`, which requires a real SECRET_KEY and marks the
+# session cookie `Secure`. The suite has neither a key nor TLS, so it names the
+# one environment that relaxes both. Required, not decorative: without it
+# `app.config` raises at import and nothing collects.
+os.environ["ENV"] = "test"
 
 import pytest  # noqa: E402
 from alembic.config import Config  # noqa: E402

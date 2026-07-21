@@ -114,9 +114,63 @@ def test_prod_keeps_a_real_secret_key_verbatim() -> None:
 
 
 @pytest.mark.usefixtures("hermetic_env")
-def test_dev_is_the_default_environment() -> None:
-    """A bare checkout must run without an env file (§11 dev ergonomics)."""
-    assert build().env is Environment.DEV
+def test_prod_is_the_default_environment() -> None:
+    """Omitting ENV must fail *closed*.
+
+    This assertion is inverted from what it was, deliberately. When DEV was the
+    default, every production rule below hung off a variable that nothing in the
+    deployment set — the container ran with `cookie_secure=False` and signed real
+    session cookies with `DEV_INSECURE_SECRET_KEY`, and no test noticed because
+    each one named its environment explicitly. The insecure path is now the one
+    you have to ask for.
+    """
+    # A key is supplied only so the assertion is about `env` and not about the
+    # SECRET_KEY rule that PROD then triggers — that is the next test.
+    assert build(secret_key=REAL_SECRET_KEY).env is Environment.PROD
+
+
+@pytest.mark.usefixtures("hermetic_env")
+def test_a_default_config_with_no_secret_key_refuses_to_boot() -> None:
+    """The end-to-end statement of the above: a bare `Settings()` — no ENV, no
+    SECRET_KEY, which is precisely a forgotten deployment — must not start.
+
+    `build()` takes no arguments here on purpose. It is the only test that
+    reproduces the real misconfiguration rather than asserting a piece of it.
+    """
+    with pytest.raises(ValidationError) as exc:
+        build()
+
+    assert "SECRET_KEY is required" in str(exc.value)
+
+
+@pytest.mark.usefixtures("hermetic_env")
+@pytest.mark.parametrize("value", ["", "  ", "production", "prd", "Prod", "staging", "nonsense"])
+def test_unrecognised_environments_resolve_to_prod(value: str) -> None:
+    """Only the exact strings `dev` and `test` relax anything.
+
+    Near-misses matter more than nonsense here: `production` and `Prod` are what
+    an operator actually types into a host's config UI, and both must land on the
+    hardened path rather than raising a validation error the operator would then
+    "fix" by deleting the variable.
+    """
+    with pytest.raises(ValidationError) as exc:
+        build(env=value)
+
+    assert "SECRET_KEY is required" in str(exc.value)
+
+
+@pytest.mark.usefixtures("hermetic_env")
+@pytest.mark.parametrize("value", ["dev", "DEV", " dev ", "test", "TEST"])
+def test_the_relaxed_environments_are_named_exactly(value: str) -> None:
+    """Case and surrounding whitespace are forgiven; the name is not."""
+    assert build(env=value).secret_key == DEV_INSECURE_SECRET_KEY
+
+
+@pytest.mark.usefixtures("hermetic_env")
+def test_cookie_secure_is_false_in_test() -> None:
+    """The suite drives the app over plain http; a `Secure` cookie would be set
+    and never sent back, failing every auth test for an unrelated reason."""
+    assert build(env=Environment.TEST).cookie_secure is False
 
 
 @pytest.mark.usefixtures("hermetic_env")

@@ -22,10 +22,12 @@ from app.models import User
 from app.ratelimit import SlidingWindowRateLimiter
 from app.schemas import LoginIn, MeOut, MeSettingsIn, UserOut
 from app.security import (
+    ERROR_PASSWORD_TOO_SHORT,
     dummy_password_hash,
     hash_password,
     new_ics_token,
     password_needs_rehash,
+    password_too_short,
     unsign_token,
     verify_password,
 )
@@ -55,11 +57,9 @@ ERROR_RATE_LIMITED = "rate_limited"
 ERROR_INVALID_CURRENT_PASSWORD = "invalid_current_password"
 ERROR_CURRENT_PASSWORD_REQUIRED = "current_password_required"
 ERROR_NEW_PASSWORD_REQUIRED = "new_password_required"
-ERROR_NEW_PASSWORD_TOO_SHORT = "new_password_too_short"
-
-# A floor the spec does not set: enough that this endpoint cannot be used to
-# weaken an account to a one-character password.
-MIN_PASSWORD_LENGTH = 8
+# Re-exported from `app.security`, which owns the password policy: `/me/settings`
+# and root's `/root/users` both set passwords and must enforce the same floor.
+ERROR_NEW_PASSWORD_TOO_SHORT = ERROR_PASSWORD_TOO_SHORT
 
 
 def _client_ip(request: Request) -> str:
@@ -202,7 +202,7 @@ def _apply_password_change(db: DbDep, user: User, body: MeSettingsIn, cookie: st
     # Checked here rather than as a Field constraint so the failure is a code the
     # §9 dictionaries can render, not pydantic's error list (which the frontend
     # can only degrade to "something went wrong").
-    if len(body.new_password) < MIN_PASSWORD_LENGTH:
+    if password_too_short(body.new_password):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=ERROR_NEW_PASSWORD_TOO_SHORT,

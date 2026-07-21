@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
+import { API_BASE } from '../api/client'
 import { en } from '../i18n/en'
 import { it as itDict } from '../i18n/it'
 import { renderWithProviders, stubFetch } from '../test/utils'
@@ -148,7 +149,7 @@ test('the ICS feed URL carries the caller’s own token and warns about regenera
   renderWithProviders(<SettingsView />)
 
   const field = await screen.findByLabelText(itDict['settings.ics.url'])
-  expect(field).toHaveValue(`${window.location.origin}/export/ics?token=feed-token-abc`)
+  expect(field).toHaveValue(`${window.location.origin}/api/export/ics?token=feed-token-abc`)
   expect(screen.getByText(itDict['settings.ics.regenerateWarning'])).toBeInTheDocument()
 })
 
@@ -162,7 +163,10 @@ test('regenerating the ICS token confirms first, then POSTs and re-reads /me', a
   // Second /me read answers the rotated token.
   fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-    const path = url.split('?')[0] ?? url
+    const rawPath = url.split('?')[0] ?? url
+    // Same normalisation `stubFetch` does: this test replaces the stub wholesale
+    // to make /me stateful, so it has to strip the §7 prefix itself.
+    const path = rawPath.startsWith(`${API_BASE}/`) ? rawPath.slice(API_BASE.length) : rawPath
     const method = init?.method ?? 'GET'
     calls.push({ key: `${method} ${path}`, body: null })
     if (path === '/me') {
@@ -193,7 +197,7 @@ test('regenerating the ICS token confirms first, then POSTs and re-reads /me', a
   })
   await waitFor(() => {
     expect(screen.getByLabelText(itDict['settings.ics.url'])).toHaveValue(
-      `${window.location.origin}/export/ics?token=feed-token-xyz`,
+      `${window.location.origin}/api/export/ics?token=feed-token-xyz`,
     )
   })
 })

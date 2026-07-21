@@ -14,8 +14,17 @@ import { useAuth } from '../auth/AuthContext'
 import type { Language, TranslationKey } from '../i18n'
 import { useLanguage, useT } from '../i18n'
 import { NotificationsProvider, useNotifications } from '../notifications/NotificationsContext'
-import { BellIcon, CalendarIcon, GearIcon, SlidersIcon, SwapIcon } from './icons'
+import {
+  BellIcon,
+  CalendarIcon,
+  GearIcon,
+  ShieldIcon,
+  SlidersIcon,
+  SwapIcon,
+  UsersIcon,
+} from './icons'
 import { SacrificePrompt } from './SacrificePrompt'
+import { canManageUsers, hasAdminPanelAccess } from '../auth/capabilities'
 
 interface NavItem {
   labelKey: TranslationKey
@@ -87,6 +96,49 @@ function NotificationBell() {
   )
 }
 
+/**
+ * The §5 admin/root panels, as icon links in the header (§9).
+ *
+ * Deliberately NOT extra entries in the bottom tab bar: that bar is the daily
+ * navigation for five worker views and a seventh tab does not fit a phone
+ * without shrinking all of them. The panels are tools two of six people reach
+ * occasionally, so they sit in the header at every breakpoint instead — present
+ * on mobile, never crowding the primary nav.
+ *
+ * Gated on the caller's own §5 capabilities: a plain worker renders neither, and
+ * the route guard refuses the URL as well.
+ */
+function ToolLinks() {
+  const t = useT()
+  const { user } = useAuth()
+  const capabilities = user?.capabilities
+  const links: { path: string; labelKey: TranslationKey; icon: typeof ShieldIcon }[] = []
+  if (hasAdminPanelAccess(capabilities)) {
+    links.push({ path: '/admin', labelKey: 'nav.admin', icon: ShieldIcon })
+  }
+  if (canManageUsers(capabilities)) {
+    links.push({ path: '/root', labelKey: 'nav.root', icon: UsersIcon })
+  }
+  if (links.length === 0) return null
+
+  return (
+    <>
+      {links.map(({ path, labelKey, icon: Icon }) => (
+        <NavLink
+          key={path}
+          to={path}
+          aria-label={t(labelKey)}
+          className={({ isActive }) =>
+            `rounded-md p-1.5 ${isActive ? 'text-ink-1' : 'text-ink-2 hover:text-ink-1'}`
+          }
+        >
+          <Icon className="h-4.5 w-4.5" />
+        </NavLink>
+      ))}
+    </>
+  )
+}
+
 function navLinkClass(isActive: boolean): string {
   return isActive ? 'text-ink-1 font-medium' : 'text-ink-2 hover:text-ink-1 transition-colors'
 }
@@ -132,6 +184,7 @@ function ShellFrame() {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
+            <ToolLinks />
             <NotificationBell />
             <LanguageToggle />
             {user ? (

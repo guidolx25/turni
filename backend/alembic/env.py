@@ -27,7 +27,15 @@ config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` is load-bearing, not a preference.
+    # `fileConfig` defaults to True, which sets `disabled = True` on every logger
+    # that already exists — including all of `app.*` — for the REST OF THE
+    # PROCESS. Alembic run as a standalone command that is harmless (it exits),
+    # but running migrations in-process (a deployment that upgrades at startup,
+    # a test that migrates) would silently mute the application's own logging,
+    # and §11's ops surface IS the log: the failure mode is a running server that
+    # reports nothing.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

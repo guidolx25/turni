@@ -89,6 +89,24 @@ export function AlertIcon({ className }: IconProps) {
   )
 }
 
+export function ShieldIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M8 1.75 13 3.5v4.25c0 3.1-2 5.35-5 6.5-3-1.15-5-3.4-5-6.5V3.5L8 1.75Z" />
+    </svg>
+  )
+}
+
+export function UsersIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <circle cx="6" cy="5.75" r="2.25" />
+      <path d="M2 13.25c0-2.2 1.8-3.5 4-3.5s4 1.3 4 3.5" />
+      <path d="M10.75 4a2.25 2.25 0 0 1 0 4.4M11.5 10.1c1.5.35 2.5 1.5 2.5 3.15" />
+    </svg>
+  )
+}
+
 export function CalendarIcon({ className }: IconProps) {
   return (
     <svg {...base(className)}>

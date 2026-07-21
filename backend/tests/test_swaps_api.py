@@ -64,7 +64,7 @@ def _future_monday(weeks_ahead: int = 2) -> dt.date:
 
 
 def login(client: TestClient, username: str) -> None:
-    resp = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+    resp = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
@@ -238,7 +238,7 @@ def _create(
     client: TestClient, target: User, mine: Assignment, theirs: Assignment
 ) -> tuple[int, dict]:
     resp = client.post(
-        "/swaps",
+        "/api/swaps",
         json={
             "to_user": target.id,
             "from_assignment": mine.id,
@@ -285,7 +285,7 @@ def test_valid_swap_applies_atomically_and_audit_logs(
     swap_id = body["id"]
 
     login(client, target.username)
-    resp = client.post(f"/swaps/{swap_id}/accept")
+    resp = client.post(f"/api/swaps/{swap_id}/accept")
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "applied"
 
@@ -338,7 +338,7 @@ def test_swap_accepted_notifies_both_parties_and_the_visible_admin_only(
     assert [n.user_id for n in _notes(session, EVENT_SWAP_REQUESTED)] == [target.id]
 
     login(client, target.username)
-    assert client.post(f"/swaps/{body['id']}/accept").status_code == 200
+    assert client.post(f"/api/swaps/{body['id']}/accept").status_code == 200
 
     session.expire_all()
     told = {n.user_id for n in _notes(session, EVENT_SWAP_ACCEPTED)}
@@ -373,7 +373,7 @@ def test_root_as_a_party_is_notified_like_any_worker(
     code, body = _create(client, target, mine, theirs)
     assert code == 201, body
     login(client, target.username)
-    assert client.post(f"/swaps/{body['id']}/accept").status_code == 200
+    assert client.post(f"/api/swaps/{body['id']}/accept").status_code == 200
 
     session.expire_all()
     told = {n.user_id for n in _notes(session, EVENT_SWAP_ACCEPTED)}
@@ -458,7 +458,7 @@ def test_role_validity_is_rechecked_at_acceptance(client: TestClient, session: D
     session.commit()
 
     login(client, target.username)
-    resp = client.post(f"/swaps/{body['id']}/accept")
+    resp = client.post(f"/api/swaps/{body['id']}/accept")
     assert resp.status_code == 422, resp.text
     assert resp.json()["detail"] == "swap_wrong_holder"
 
@@ -498,7 +498,7 @@ def test_the_jolly_may_take_either_role(client: TestClient, session: DbSession) 
     code, body = _create(client, mattia, mine, theirs)
     assert code == 201, body
     login(client, mattia.username)
-    assert client.post(f"/swaps/{body['id']}/accept").status_code == 200
+    assert client.post(f"/api/swaps/{body['id']}/accept").status_code == 200
 
     session.expire_all()
     assert session.get(Assignment, mine.id).user_id == mattia.id
@@ -664,7 +664,7 @@ def test_weekend_bagnino_swap_is_allowed(client: TestClient, session: DbSession)
     code, body = _create(client, target, mine, theirs)
     assert code == 201, body
     login(client, target.username)
-    assert client.post(f"/swaps/{body['id']}/accept").status_code == 200
+    assert client.post(f"/api/swaps/{body['id']}/accept").status_code == 200
 
     session.expire_all()
     assert session.get(Assignment, mine.id).user_id == target.id
@@ -702,7 +702,7 @@ def test_a_sunday_swap_re_seeds_next_weeks_alternation_boundary(
     code, body = _create(client, target, mine, theirs)
     assert code == 201, body
     login(client, target.username)
-    assert client.post(f"/swaps/{body['id']}/accept").status_code == 200
+    assert client.post(f"/api/swaps/{body['id']}/accept").status_code == 200
 
     session.expire_all()
     after = {
@@ -758,7 +758,7 @@ def test_a_saturday_for_sunday_swap_clears_the_vacated_boundary(
     code, body = _create(client, target, sat, sun)
     assert code == 201, body
     login(client, target.username)
-    assert client.post(f"/swaps/{body['id']}/accept").status_code == 200
+    assert client.post(f"/api/swaps/{body['id']}/accept").status_code == 200
 
     session.expire_all()
     # The target gave up his only Sunday row → no boundary at all.
@@ -806,7 +806,7 @@ def test_a_swap_never_overwrites_a_newer_weeks_boundary(
     code, body = _create(client, target, mine, theirs)
     assert code == 201, body
     login(client, target.username)
-    assert client.post(f"/swaps/{body['id']}/accept").status_code == 200
+    assert client.post(f"/api/swaps/{body['id']}/accept").status_code == 200
 
     session.expire_all()
     after = {
@@ -874,7 +874,7 @@ def test_only_the_addressed_worker_may_answer(client: TestClient, session: DbSes
 
     # The requester: involved, so 403 rather than a misleading 404.
     login(client, swap["requester"].username)
-    resp = client.post(f"/swaps/{swap['id']}/accept")
+    resp = client.post(f"/api/swaps/{swap['id']}/accept")
     assert resp.status_code == 403, resp.text
     assert resp.json()["detail"] == "swap_wrong_target"
 
@@ -883,14 +883,14 @@ def test_only_the_addressed_worker_may_answer(client: TestClient, session: DbSes
         u for u in roster.values() if u.id not in (swap["requester"].id, swap["target"].id)
     )
     login(client, outsider.username)
-    resp = client.post(f"/swaps/{swap['id']}/accept")
+    resp = client.post(f"/api/swaps/{swap['id']}/accept")
     assert resp.status_code == 404, resp.text
     assert resp.json()["detail"] == "swap_not_found"
 
     # Control: the addressed worker CAN act, so the refusals above are about
     # authority, not about a broken endpoint.
     login(client, swap["target"].username)
-    assert client.post(f"/swaps/{swap['id']}/accept").status_code == 200
+    assert client.post(f"/api/swaps/{swap['id']}/accept").status_code == 200
 
 
 def test_a_resolved_swap_cannot_be_answered_twice(client: TestClient, session: DbSession) -> None:
@@ -898,9 +898,9 @@ def test_a_resolved_swap_cannot_be_answered_twice(client: TestClient, session: D
     roster = create_full_roster(session)
     swap = _pending_swap(client, session, roster)
     login(client, swap["target"].username)
-    assert client.post(f"/swaps/{swap['id']}/accept").status_code == 200
+    assert client.post(f"/api/swaps/{swap['id']}/accept").status_code == 200
 
-    resp = client.post(f"/swaps/{swap['id']}/accept")
+    resp = client.post(f"/api/swaps/{swap['id']}/accept")
     assert resp.status_code == 409, resp.text
     assert resp.json()["detail"] == "swap_already_resolved"
     assert len(_audit_rows(session, "apply")) == 1, "the second accept applied nothing"
@@ -913,7 +913,7 @@ def test_reject_closes_the_request_and_tells_the_requester(
     roster = create_full_roster(session)
     swap = _pending_swap(client, session, roster)
     login(client, swap["target"].username)
-    resp = client.post(f"/swaps/{swap['id']}/reject")
+    resp = client.post(f"/api/swaps/{swap['id']}/reject")
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "rejected"
 
@@ -975,7 +975,7 @@ def test_admin_approval_flag_parks_the_swap_without_applying(
     swap = _pending_swap(client, session, roster)
 
     login(client, swap["target"].username)
-    resp = client.post(f"/swaps/{swap['id']}/accept")
+    resp = client.post(f"/api/swaps/{swap['id']}/accept")
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "pending_admin"
 
@@ -1047,7 +1047,7 @@ def test_accepting_after_48h_expires_instead_of_applying(
     _age_swap(session, swap["id"], SWAP_TTL + dt.timedelta(minutes=1))
 
     login(client, swap["target"].username)
-    resp = client.post(f"/swaps/{swap['id']}/accept")
+    resp = client.post(f"/api/swaps/{swap['id']}/accept")
     assert resp.status_code == 409, resp.text
     assert resp.json()["detail"] == "swap_already_resolved"
 
@@ -1065,7 +1065,7 @@ def test_listing_expires_an_overdue_request(client: TestClient, session: DbSessi
     _age_swap(session, swap["id"], SWAP_TTL + dt.timedelta(minutes=1))
 
     login(client, swap["target"].username)
-    body = client.get("/swaps", params={"week": swap["week"].monday_date.isoformat()}).json()
+    body = client.get("/api/swaps", params={"week": swap["week"].monday_date.isoformat()}).json()
     assert [s["status"] for s in body] == ["expired"]
 
 
@@ -1082,14 +1082,14 @@ def test_listing_returns_only_the_callers_own_swaps(client: TestClient, session:
 
     for party in (swap["requester"], swap["target"]):
         login(client, party.username)
-        body = client.get("/swaps", params={"week": monday}).json()
+        body = client.get("/api/swaps", params={"week": monday}).json()
         assert [s["id"] for s in body] == [swap["id"]]
 
     outsider = next(
         u for u in roster.values() if u.id not in (swap["requester"].id, swap["target"].id)
     )
     login(client, outsider.username)
-    assert client.get("/swaps", params={"week": monday}).json() == []
+    assert client.get("/api/swaps", params={"week": monday}).json() == []
 
 
 def test_listing_an_unknown_week_is_empty_not_an_error(
@@ -1097,7 +1097,7 @@ def test_listing_an_unknown_week_is_empty_not_an_error(
 ) -> None:
     create_full_roster(session)
     login(client, "pasha")
-    resp = client.get("/swaps", params={"week": _future_monday(40).isoformat()})
+    resp = client.get("/api/swaps", params={"week": _future_monday(40).isoformat()})
     assert resp.status_code == 200
     assert resp.json() == []
 
@@ -1111,7 +1111,7 @@ def test_swap_payloads_never_leak_root_or_the_feed_token(
     roster = create_full_roster(session)
     swap = _pending_swap(client, session, roster)
     login(client, swap["target"].username)
-    body = client.get("/swaps", params={"week": swap["week"].monday_date.isoformat()}).json()
+    body = client.get("/api/swaps", params={"week": swap["week"].monday_date.isoformat()}).json()
     assert body
 
     serialized = repr(body)

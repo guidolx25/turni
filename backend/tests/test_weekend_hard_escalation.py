@@ -49,13 +49,13 @@ def _future_monday(weeks_ahead: int = 2) -> dt.date:
 
 
 def login(client: TestClient, username: str) -> None:
-    resp = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+    resp = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
 def _submit(client: TestClient, monday: dt.date, day: str, slot: str, kind: str):
     return client.post(
-        "/constraints",
+        "/api/constraints",
         json={"week": monday.isoformat(), "day": day, "slot": slot, "kind": kind},
     )
 
@@ -204,7 +204,7 @@ def test_re_upsert_of_an_already_hard_weekend_row_does_not_re_notify(
 
     for _ in range(3):
         resp = client.post(
-            "/constraints",
+            "/api/constraints",
             json={
                 "week": monday.isoformat(),
                 "day": "sat",
@@ -231,7 +231,7 @@ def test_deleting_a_hard_weekend_row_does_not_escalate(
     assert created.status_code == 201
     before = len(_escalations(session))
 
-    assert client.delete(f"/constraints/{created.json()['id']}").status_code == 204
+    assert client.delete(f"/api/constraints/{created.json()['id']}").status_code == 204
 
     assert len(_escalations(session)) == before  # no new notification
     assert len(_escalate_audits(session)) == 1

@@ -80,6 +80,22 @@ def revoke_other_sessions(db: DbSession, user: User, keep_token: str | None) -> 
     return int(db.execute(stmt).rowcount)
 
 
+def revoke_all_sessions(db: DbSession, user: User) -> int:
+    """Delete EVERY session of `user`; returns how many.
+
+    §5's deactivation: "Deactivation is immediate — it revokes the user's open
+    sessions, not just their next login." A deactivated user must stop being able
+    to act at once, and `resolve_session_user` already refuses an inactive user —
+    but relying on that alone would leave live session rows for an account that
+    has been removed, so the removal deletes them.
+
+    Also the root password reset (§5 row 7): resetting someone's password is what
+    an admin does when that account is compromised or the holder is gone, so the
+    device holding the old cookie must be evicted, not merely renamed.
+    """
+    return revoke_other_sessions(db, user, None)
+
+
 def purge_expired_sessions(db: DbSession, *, now: dt.datetime | None = None) -> int:
     """Delete every expired session row; returns how many.
 

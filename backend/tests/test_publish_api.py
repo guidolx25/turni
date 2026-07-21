@@ -32,7 +32,7 @@ def _future_monday(weeks_ahead: int = 2) -> dt.date:
 
 
 def login(client: TestClient, username: str) -> None:
-    resp = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+    resp = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
@@ -48,7 +48,7 @@ def test_publish_requires_admin(client: TestClient, session: DbSession) -> None:
     monday = _future_monday()
     _solve(session, monday)
     login(client, "pasha")
-    assert client.post("/admin/publish", params={"week": monday.isoformat()}).status_code == 403
+    assert client.post("/api/admin/publish", params={"week": monday.isoformat()}).status_code == 403
 
 
 # --- happy path -------------------------------------------------------------
@@ -64,7 +64,7 @@ def test_publish_locks_the_week(client: TestClient, session: DbSession) -> None:
     assert week is not None and week.status is WeekStatus.SOLVED  # solve parked it here
     login(client, "mattia")
 
-    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "locked"
 
@@ -80,7 +80,7 @@ def test_publish_writes_solver_state_from_template(client: TestClient, session: 
     monday = _future_monday()
     _solve(session, monday)
     login(client, "mattia")
-    client.post("/admin/publish", params={"week": monday.isoformat()})
+    client.post("/api/admin/publish", params={"week": monday.isoformat()})
 
     state = {s.user_id: s for s in session.scalars(select(SolverState)).all()}
     assert state[roster["matteo"].id].last_worked_slot is AssignmentSlot.PM
@@ -100,7 +100,7 @@ def test_publish_fans_out_to_every_worker_including_root(
     monday = _future_monday()
     _solve(session, monday)
     login(client, "mattia")
-    client.post("/admin/publish", params={"week": monday.isoformat()})
+    client.post("/api/admin/publish", params={"week": monday.isoformat()})
 
     notes = session.scalars(select(Notification)).all()
     recipients = {n.user_id for n in notes}
@@ -113,7 +113,7 @@ def test_publish_records_audit(client: TestClient, session: DbSession) -> None:
     monday = _future_monday()
     _solve(session, monday)
     login(client, "mattia")
-    client.post("/admin/publish", params={"week": monday.isoformat()})
+    client.post("/api/admin/publish", params={"week": monday.isoformat()})
 
     rows = session.scalars(select(AuditLog).where(AuditLog.action == "publish")).all()
     assert len(rows) == 1
@@ -130,7 +130,7 @@ def test_publish_unsolved_week_is_409(client: TestClient, session: DbSession) ->
     get_or_create_week(session, monday)  # exists, but never solved
     login(client, "mattia")
 
-    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 409
     assert resp.json()["detail"] == "week_not_solved"
 
@@ -138,7 +138,7 @@ def test_publish_unsolved_week_is_409(client: TestClient, session: DbSession) ->
 def test_publish_unknown_week_is_404(client: TestClient, session: DbSession) -> None:
     create_full_roster(session)
     login(client, "mattia")
-    resp = client.post("/admin/publish", params={"week": _future_monday().isoformat()})
+    resp = client.post("/api/admin/publish", params={"week": _future_monday().isoformat()})
     assert resp.status_code == 404
 
 
@@ -147,9 +147,9 @@ def test_publish_twice_is_409(client: TestClient, session: DbSession) -> None:
     monday = _future_monday()
     _solve(session, monday)
     login(client, "mattia")
-    client.post("/admin/publish", params={"week": monday.isoformat()})
+    client.post("/api/admin/publish", params={"week": monday.isoformat()})
 
-    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 409
     assert resp.json()["detail"] == "week_already_locked"
 
@@ -176,7 +176,7 @@ def test_infeasible_week_cannot_publish(client: TestClient, session: DbSession) 
     assert week.status is WeekStatus.SOLVED  # parked, awaiting the §2.3 flow
 
     login(client, "mattia")
-    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 409
     assert resp.json()["detail"] == "week_not_solved"
 
@@ -194,10 +194,10 @@ def test_worker_sees_schedule_after_publish(client: TestClient, session: DbSessi
     monday = _future_monday()
     _solve(session, monday)
     login(client, "mattia")
-    client.post("/admin/publish", params={"week": monday.isoformat()})
+    client.post("/api/admin/publish", params={"week": monday.isoformat()})
 
     # A different, non-admin worker now sees it.
     login(client, "pasha")
-    body = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    body = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
     assert body["status"] == "locked"
     assert len(body["assignments"]) > 0

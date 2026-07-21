@@ -28,6 +28,14 @@ ACTION_SWAP = "swap"
 # revoked what, when" is exactly what the audit log is for. Never records the
 # credential itself, only that it changed.
 ACTION_CREDENTIAL = "credential"
+# §5 row 7: root creating or editing an account (including deactivation, the only
+# removal §5 permits). A password RESET is `ACTION_CREDENTIAL` instead, so "who
+# reset whose password" filters apart from "who changed whose role".
+ACTION_USER = "user"
+# §11's nightly SQLite backup. A system action with a NULL actor (§6), logged so
+# an operator can establish from the audit trail that backups actually ran — and
+# notice from the payload when one did not.
+ACTION_BACKUP = "backup"
 # A conflict handed to a human because no automated path can resolve it (today:
 # a HARD H7 request on an H5 template day, escalated at submission).
 ACTION_ESCALATE = "escalate"

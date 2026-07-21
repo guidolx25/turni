@@ -42,7 +42,12 @@ COPY --from=frontend /build/dist ./static
 RUN mkdir -p /data /data/backups
 ENV DATABASE_URL="sqlite:////data/turni.db" \
     BACKUP_DIR="/data/backups" \
-    STATIC_DIR="/app/static"
+    STATIC_DIR="/app/static" \
+    # Belt and braces. `app.config` already treats anything that is not an
+    # explicit dev/test as production, so omitting this would be safe — it is
+    # stated anyway so the image's intent is legible without reading the
+    # validator, and so `docker run` without a host config is unambiguous.
+    ENV=prod
 
 EXPOSE 8000
 

@@ -30,7 +30,7 @@ def _future_monday(weeks_ahead: int = 2) -> dt.date:
 
 
 def login(client: TestClient, username: str) -> None:
-    resp = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+    resp = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
@@ -44,7 +44,8 @@ def _solve_and_lock(session: DbSession, monday: dt.date) -> None:
 
 
 def test_schedule_requires_auth(client: TestClient) -> None:
-    assert client.get("/schedule", params={"week": _future_monday().isoformat()}).status_code == 401
+    resp = client.get("/api/schedule", params={"week": _future_monday().isoformat()})
+    assert resp.status_code == 401
 
 
 def test_worker_sees_locked_schedule(client: TestClient, session: DbSession) -> None:
@@ -53,7 +54,7 @@ def test_worker_sees_locked_schedule(client: TestClient, session: DbSession) -> 
     _solve_and_lock(session, monday)
 
     login(client, "pasha")
-    resp = client.get("/schedule", params={"week": monday.isoformat()})
+    resp = client.get("/api/schedule", params={"week": monday.isoformat()})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "locked"
@@ -68,7 +69,7 @@ def test_worker_cannot_see_unpublished_schedule(client: TestClient, session: DbS
     run_solve(session, week)  # solved, still open (not published)
 
     login(client, "pasha")
-    body = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    body = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
     assert body["assignments"] == []
 
 
@@ -80,7 +81,7 @@ def test_admin_previews_unpublished_schedule(client: TestClient, session: DbSess
     run_solve(session, week)
 
     login(client, "mattia")
-    body = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    body = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
     assert len(body["assignments"]) > 0
 
 
@@ -91,7 +92,7 @@ def test_schedule_never_serializes_is_root(client: TestClient, session: DbSessio
     _solve_and_lock(session, monday)
 
     login(client, "pasha")
-    body = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    body = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
     for a in body["assignments"]:
         assert "is_root" not in a
     # Matteo (root) is a working bagnino → he appears in the coverage.
@@ -101,6 +102,6 @@ def test_schedule_never_serializes_is_root(client: TestClient, session: DbSessio
 def test_unknown_week_is_empty(client: TestClient, session: DbSession) -> None:
     create_full_roster(session)
     login(client, "pasha")
-    body = client.get("/schedule", params={"week": _future_monday(9).isoformat()}).json()
+    body = client.get("/api/schedule", params={"week": _future_monday(9).isoformat()}).json()
     assert body["assignments"] == []
     assert body["status"] == "open"

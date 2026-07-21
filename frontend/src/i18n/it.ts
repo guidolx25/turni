@@ -17,6 +17,9 @@ export const it = {
   'common.remove': 'Rimuovi',
   'common.copy': 'Copia',
   'common.copied': 'Copiato',
+  'common.previous': 'Precedenti',
+  'common.next': 'Successive',
+  'common.romeTime': 'Tutti gli orari sono in ora di Roma.',
 
   'nav.schedule': 'Turni',
   'nav.swaps': 'Scambi',
@@ -24,6 +27,8 @@ export const it = {
   'nav.notifications': 'Notifiche',
   'nav.settings': 'Impostazioni',
   'nav.soon': 'In arrivo',
+  'nav.admin': 'Amministrazione',
+  'nav.root': 'Utenti',
 
   'shell.logout': 'Esci',
   'shell.loggedInAs': 'Connesso come {name}',
@@ -61,6 +66,7 @@ export const it = {
   'slot.full_day': 'Tutto il giorno',
   'role.bagnino': 'Bagnino',
   'role.spiaggino': 'Spiaggino',
+  'role.jolly': 'Jolly',
 
   'swaps.title': 'Scambi',
   'swaps.create.title': 'Nuovo scambio',
@@ -195,6 +201,145 @@ export const it = {
   'settings.ics.regenerateConfirm': 'Confermi la rigenerazione?',
   'settings.ics.regenerated': 'Nuovo indirizzo generato.',
 
+  'admin.title': 'Amministrazione',
+  'admin.intro':
+    'Generazione, pubblicazione e correzioni manuali del calendario. Ogni azione qui è registrata.',
+  'admin.noWeeks': 'Nessuna settimana disponibile.',
+
+  'admin.solve.title': 'Genera calendario',
+  'admin.solve.help':
+    'Generare calcola il calendario ma non lo rende visibile: la pubblicazione è un passo separato.',
+  'admin.solve.generate': 'Genera ora',
+  'admin.solve.working': 'Calcolo in corso…',
+  'admin.solve.confirm':
+    '«Genera ora» chiude in anticipo la finestra richieste di questa settimana: da quel momento nessuno può più modificare le proprie richieste. Il calendario resta da rivedere e non viene pubblicato.',
+  'admin.solve.confirmAction': 'Chiudi la finestra e genera',
+  'admin.solve.result': 'Esito del calcolo',
+  'admin.solve.status.optimal': 'Soluzione ottima',
+  'admin.solve.status.feasible': 'Soluzione valida',
+  'admin.solve.status.infeasible': 'Nessuna soluzione possibile',
+  'admin.solve.status.unknown': 'Esito non riconosciuto',
+  'admin.solve.duration': 'Calcolato in {seconds} s',
+  'admin.solve.objective': 'Dettaglio obiettivo',
+  'admin.solve.objective.softUnmet': 'Preferenze non soddisfatte',
+  'admin.solve.objective.alternation': 'Interruzioni di alternanza',
+  'admin.solve.objective.fairness': 'Squilibrio mattina/pomeriggio',
+  'admin.solve.objective.spread': 'Coppie del weekend con lo stesso giorno libero',
+  'admin.solve.objective.jollyDays': 'Giornate lavorate dal jolly',
+  'admin.solve.objective.total': 'Totale pesato',
+  'admin.solve.blocking': 'Richieste vincolanti in conflitto',
+  'admin.solve.blocking.help':
+    'Non esiste un calendario che rispetti tutte queste richieste insieme. Se il conflitto cade di venerdì su un lavoratore stabile, gli viene proposto di spostare il giorno libero; altrimenti la decisione resta a te.',
+  'admin.solve.blocking.item': '{who}: {day}, {slot}',
+  'admin.solve.blocking.unknownWorker': 'Un lavoratore',
+  'admin.solve.infeasibleNote': 'Una settimana senza soluzione non può essere pubblicata.',
+
+  'admin.publish.title': 'Pubblica',
+  'admin.publish.help':
+    'La pubblicazione rende i turni visibili a tutti, blocca le fasce e invia le notifiche. Da quel momento si cambia solo con uno scambio o con una modifica manuale.',
+  'admin.publish.submit': 'Pubblica la settimana',
+  'admin.publish.working': 'Pubblicazione…',
+  'admin.publish.done': 'Settimana pubblicata.',
+  'admin.publish.needsSolved':
+    'Puoi pubblicare solo una settimana già calcolata e senza conflitti aperti.',
+  'admin.publish.alreadyPublished': 'Questa settimana è già pubblicata.',
+
+  'admin.override.title': 'Modifica manuale di un turno',
+  'admin.override.help':
+    'Cambia chi copre una fascia già pubblicata, senza passare dallo scambio tra colleghi.',
+  'admin.override.needsLocked':
+    'La modifica manuale vale solo per le settimane pubblicate: una settimana non ancora pubblicata si rigenera.',
+  'admin.override.noSlots': 'Nessun turno da modificare in questa settimana.',
+  'admin.override.slot': 'Turno da modificare',
+  'admin.override.newHolder': 'Nuova persona',
+  'admin.override.pick': 'Scegli…',
+  'admin.override.slotOption': '{day} {slot} · {role} — {name}',
+  'admin.override.warning':
+    'Stai cambiando un calendario già pubblicato su cui le persone contano. La modifica ha effetto subito, viene registrata, e sia chi perde il turno sia chi lo riceve ricevono una notifica.',
+  'admin.override.confirmAction': 'Conferma la modifica',
+  'admin.override.working': 'Modifica in corso…',
+  'admin.override.done': 'Turno modificato. Le persone coinvolte sono state avvisate.',
+  'admin.override.violations': 'Regole ora non rispettate',
+  'admin.override.violations.help':
+    'La modifica è stata applicata comunque: la decisione è tua. Queste situazioni restano da sistemare a mano.',
+  'admin.override.violation.h2': '{name}: due ruoli nella stessa fascia ({day}, {slot}).',
+  'admin.override.violation.h3': '{name}: nessun giorno libero in settimana.',
+  'admin.override.violation.h4': '{name}: più di una fascia nello stesso giorno ({day}).',
+  'admin.override.violation.other': '{name}: vincolo {rule} non rispettato.',
+  'admin.override.someone': 'Un lavoratore',
+
+  'admin.submissions.title': 'Richieste ricevute',
+  'admin.submissions.help': 'Tutte le indisponibilità inviate per questa settimana, per persona.',
+  'admin.submissions.empty': 'Nessuna richiesta per questa settimana.',
+  'admin.submissions.item': '{day} · {slot}',
+
+  'admin.audit.title': 'Registro',
+  'admin.audit.help':
+    'Ogni cambiamento di stato: calcoli, pubblicazioni, scambi, modifiche manuali.',
+  'admin.audit.empty': 'Nessuna voce nel registro.',
+  'admin.audit.systemActor': 'Sistema',
+  'admin.audit.systemHelp':
+    'Le voci di «Sistema» sono azioni automatiche senza autore umano: calcolo pianificato, scadenza degli scambi, backup notturno.',
+  'admin.audit.range': '{from}–{to} di {total}',
+  'admin.audit.filterByAction': 'Filtra per azione: {action}',
+  'admin.audit.filterByEntity': 'Filtra per oggetto: {entity}',
+  'admin.audit.filtersActive': 'Filtri attivi',
+  'admin.audit.filtersClear': 'Rimuovi i filtri',
+  'admin.audit.action.publish': 'Pubblicazione',
+  'admin.audit.action.solve': 'Calcolo',
+  'admin.audit.action.override': 'Modifica manuale',
+  'admin.audit.action.sacrifice': 'Sacrificio',
+  'admin.audit.action.swap': 'Scambio',
+  'admin.audit.action.credential': 'Credenziali',
+  'admin.audit.action.escalate': 'Segnalazione',
+  'admin.audit.entity.week': 'Settimana',
+  'admin.audit.entity.constraint': 'Richiesta',
+  'admin.audit.entity.assignment': 'Turno',
+  'admin.audit.entity.swap_request': 'Richiesta di scambio',
+  'admin.audit.entity.sacrifice_proposal': 'Proposta di sacrificio',
+  'admin.audit.entity.user': 'Utente',
+
+  'root.title': 'Utenti',
+  'root.intro':
+    'Creazione degli account, modifica dei dati, reimpostazione delle password. Non c’è registrazione pubblica.',
+  'root.empty': 'Nessun utente.',
+  'root.status.active': 'Attivo',
+  'root.status.inactive': 'Disattivato',
+  'root.badge.admin': 'Amministratore',
+  'root.field.username': 'Nome utente',
+  'root.field.displayName': 'Nome visualizzato',
+  'root.field.role': 'Ruolo',
+  'root.field.email': 'Email',
+  'root.field.admin': 'Permessi da amministratore',
+  'root.field.language': 'Lingua',
+  'root.field.password': 'Password iniziale',
+  'root.create.title': 'Nuovo utente',
+  'root.create.submit': 'Crea utente',
+  'root.create.working': 'Creazione…',
+  'root.create.done': 'Utente creato.',
+  'root.edit.open': 'Gestisci {name}',
+  'root.edit.close': 'Chiudi {name}',
+  'root.edit.title': 'Dati',
+  'root.edit.done': 'Modifiche salvate.',
+  'root.deactivate.title': 'Disattivazione',
+  'root.deactivate.why':
+    'Gli account non si eliminano mai. Turni, scambi e registro fanno riferimento alle persone: cancellarne una distruggerebbe lo storico oppure renderebbe falso il registro. La disattivazione è l’unica rimozione prevista.',
+  'root.deactivate.immediate':
+    'La disattivazione ha effetto subito e chiude anche le sessioni già aperte, non solo il prossimo accesso.',
+  'root.deactivate.submit': 'Disattiva',
+  'root.deactivate.confirmAction': 'Disattiva l’account',
+  'root.deactivate.working': 'Disattivazione…',
+  'root.deactivate.done': 'Account disattivato.',
+  'root.reactivate.submit': 'Riattiva',
+  'root.reactivate.done': 'Account riattivato.',
+  'root.password.title': 'Reimposta la password',
+  'root.password.help':
+    'Imposta una nuova password per questa persona. Non serve quella attuale: è proprio questo il senso di una reimpostazione.',
+  'root.password.new': 'Nuova password',
+  'root.password.submit': 'Reimposta la password',
+  'root.password.working': 'Reimpostazione…',
+  'root.password.done': 'Password reimpostata.',
+
   // Backend error codes (§7 `{detail: "snake_case_code"}`) → `errors.<code>`.
   'errors.generic': 'Qualcosa è andato storto. Riprova.',
   'errors.network': 'Connessione assente. Controlla la rete.',
@@ -207,7 +352,24 @@ export const it = {
   'errors.week_closed': 'La finestra richieste per questa settimana è chiusa.',
   'errors.week_not_solved': 'La settimana non è ancora stata calcolata.',
   'errors.week_already_locked': 'La settimana è già pubblicata.',
-  'errors.week_not_locked': 'Gli scambi valgono solo per settimane pubblicate.',
+  // Shared by swaps (§4) and admin override (§5/§3.4): both are post-lock
+  // instruments, so the sentence must be true for either caller.
+  'errors.week_not_locked': 'Questa azione vale solo per le settimane pubblicate.',
+  // §5/§3.4 admin override (`app/routers/admin.py`).
+  'errors.override_no_change': 'Questa persona copre già questa fascia.',
+  'errors.override_ambiguous_slot':
+    'Nel weekend questa fascia ha due assegnatari: scegli il turno preciso dall’elenco.',
+  'errors.override_user_not_found': 'Persona non trovata.',
+  'errors.override_user_inactive': 'L’account di questa persona è disattivato.',
+  'errors.override_role_invalid': 'Questa persona non può coprire questo ruolo.',
+  'errors.override_row_mismatch': 'Il turno è cambiato: ricarica la settimana e riprova.',
+  // §5 row 7 root user management (`app/routers/root.py`).
+  'errors.user_not_found': 'Utente non trovato.',
+  'errors.username_taken': 'Questo nome utente è già in uso.',
+  // Worded without naming the account: it is only ever returned to the one
+  // caller who already knows which row it is (§5).
+  'errors.last_root_required':
+    'Non puoi disattivare l’unico account che può gestire gli utenti: resteresti senza modo di riattivarlo.',
   'errors.sacrifice_pending': 'C’è una proposta di sacrificio in sospeso.',
   'errors.sacrifice_not_found': 'Proposta non trovata.',
   'errors.sacrifice_already_resolved': 'Proposta già decisa.',

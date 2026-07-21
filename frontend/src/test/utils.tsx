@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 
+import { API_BASE } from '../api/client'
 import { AuthProvider } from '../auth/AuthContext'
 import { LanguageProvider } from '../i18n'
 import { NotificationsProvider } from '../notifications/NotificationsContext'
@@ -50,13 +51,19 @@ export type StubResponse = StubRoute | StubRoute[]
 /**
  * Stub global fetch: `routes` maps "METHOD /path" (query string stripped) to a
  * response. Unmatched requests 404 so a test never silently hits the network.
+ *
+ * Route keys are spec-shaped — `GET /me`, not `GET /api/me`. The §7 v1.11 prefix
+ * is stripped here rather than written into every table, for the same reason the
+ * client applies it in exactly one place: a test should say which endpoint it
+ * means, and moving the whole API should not rewrite forty fixtures.
  */
 export function stubFetch(routes: Record<string, StubResponse>) {
   const calls: { key: string; body: unknown }[] = []
   const consumed: Record<string, number> = {}
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-    const path = url.split('?')[0] ?? url
+    const rawPath = url.split('?')[0] ?? url
+    const path = rawPath.startsWith(`${API_BASE}/`) ? rawPath.slice(API_BASE.length) : rawPath
     const method = init?.method ?? 'GET'
     const key = `${method} ${path}`
     calls.push({

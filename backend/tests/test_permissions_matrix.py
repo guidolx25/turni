@@ -29,7 +29,7 @@ pytestmark = pytest.mark.phase1
 
 
 def login(client: TestClient, username: str, password: str = PASSWORD) -> None:
-    response = client.post("/auth/login", json={"username": username, "password": password})
+    response = client.post("/api/auth/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
 
 
@@ -88,7 +88,7 @@ def test_unauthenticated_is_401_not_403(
     create_worker(session)
     client = api_client_factory(probe_app)
 
-    for path in ("/probe/worker", "/probe/admin", "/probe/root", "/root/users", "/me"):
+    for path in ("/probe/worker", "/probe/admin", "/probe/root", "/api/root/users", "/api/me"):
         response = client.get(path)
         assert response.status_code == 401, path
         assert response.json()["detail"] == ERROR_NOT_AUTHENTICATED
@@ -127,7 +127,7 @@ def test_worker_is_forbidden_from_the_root_tier(
     login(client, "pasha")
 
     assert client.get("/probe/root").status_code == 403
-    assert client.get("/root/users").status_code == 403
+    assert client.get("/api/root/users").status_code == 403
 
 
 def test_admin_reaches_the_admin_tier(
@@ -153,7 +153,7 @@ def test_admin_is_forbidden_from_the_root_tier(
     client = api_client_factory(probe_app)
     login(client, "mattia")
 
-    for path in ("/probe/root", "/root/users"):
+    for path in ("/probe/root", "/api/root/users"):
         response = client.get(path)
         assert response.status_code == 403, path
         assert response.json()["detail"] == ERROR_FORBIDDEN
@@ -171,7 +171,7 @@ def test_root_inherits_the_admin_tier(
     assert client.get("/probe/worker").status_code == 200
     assert client.get("/probe/admin").status_code == 200
     assert client.get("/probe/root").status_code == 200
-    assert client.get("/root/users").status_code == 200
+    assert client.get("/api/root/users").status_code == 200
 
 
 def test_deactivated_user_is_refused_at_the_bottom_of_the_chain(
@@ -187,7 +187,7 @@ def test_deactivated_user_is_refused_at_the_bottom_of_the_chain(
     root.active = False
     session.commit()
 
-    for path in ("/probe/worker", "/probe/admin", "/probe/root", "/me"):
+    for path in ("/probe/worker", "/probe/admin", "/probe/root", "/api/me"):
         response = client.get(path)
         assert response.status_code == 401, path
         assert response.json()["detail"] == ERROR_NOT_AUTHENTICATED

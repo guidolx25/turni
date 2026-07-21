@@ -58,8 +58,31 @@ EVENT_SWAP_REJECTED = "swap_rejected"
 # 24 h from closing. Per-user (every active worker), not a role fan-out.
 EVENT_WINDOW_CLOSING_24H = "window_closing_24h"
 
-# §10's closed event list. Kept here, next to the constants, so the email-template
-# registry can be checked against it — see the parity guard below.
+# §10's closed event list, TRANSCRIBED — the ten names exactly as the spec writes
+# them, as literals rather than as the constants above.
+#
+# This is the fixed point the other two sets are checked against. `ALL_EVENTS` and
+# `email_templates.SUPPORTED_EVENTS` are both derived from code, so comparing them
+# to each other only proves they agree: deleting an event from both (or renaming
+# it in both) would leave a self-consistent system that no longer implements §10.
+# A third, independent transcription of the spec is what makes that a startup
+# failure instead of a silent divergence — and the count is asserted too, so an
+# event cannot be dropped by editing this tuple alone either.
+SPEC_EVENTS: tuple[str, ...] = (
+    "schedule_published",
+    "swap_requested",
+    "swap_accepted",
+    "swap_rejected",
+    "sacrifice_proposed",
+    "sacrifice_resolved",
+    "sacrifice_escalated",
+    "weekend_hard_escalated",
+    "window_closing_24h",
+    "admin_override",
+)
+SPEC_EVENT_COUNT = 10
+
+# The named constants, which is what call sites use.
 ALL_EVENTS: frozenset[str] = frozenset(
     {
         EVENT_SCHEDULE_PUBLISHED,
@@ -74,6 +97,17 @@ ALL_EVENTS: frozenset[str] = frozenset(
         EVENT_ADMIN_OVERRIDE,
     }
 )
+
+if len(SPEC_EVENTS) != SPEC_EVENT_COUNT or len(set(SPEC_EVENTS)) != SPEC_EVENT_COUNT:
+    raise RuntimeError(
+        f"§10 lists exactly {SPEC_EVENT_COUNT} distinct events; SPEC_EVENTS does not"
+    )
+
+if frozenset(SPEC_EVENTS) != ALL_EVENTS:
+    # Import-time, explicit raise (not `assert`, which `python -O` strips): the
+    # constants must spell §10's names, no more and no fewer.
+    _drift = ALL_EVENTS.symmetric_difference(SPEC_EVENTS)
+    raise RuntimeError(f"§10's event names and the constants disagree on: {sorted(_drift)}")
 
 if ALL_EVENTS != email_templates.SUPPORTED_EVENTS:
     # Import-time, explicit raise (not `assert`, which `python -O` strips): every

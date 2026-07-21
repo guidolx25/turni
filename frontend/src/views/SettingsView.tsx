@@ -5,31 +5,21 @@
  * Every write re-reads /me instead of trusting the response body, so what the
  * page shows is what the server stored.
  */
-import { useState, type ReactNode, type SyntheticEvent } from 'react'
+import { useState, type SyntheticEvent } from 'react'
 
-import { errorKey as toErrorKey } from '../api/client'
+import { API_BASE, errorKey as toErrorKey } from '../api/client'
 import { meApi } from '../api/endpoints'
 import type { Language } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
-import { ErrorNote, LoadingIndicator } from '../components/common'
+import {
+  ErrorNote,
+  FIELD_CLASS,
+  Help,
+  LoadingIndicator,
+  Panel as Section,
+} from '../components/common'
 import type { TranslationKey } from '../i18n'
 import { useLanguage, useT } from '../i18n'
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="space-y-3 rounded-lg border border-line bg-surface-1 p-4">
-      <h2 className="text-sm font-medium text-ink-1">{title}</h2>
-      {children}
-    </section>
-  )
-}
-
-function Help({ children }: { children: ReactNode }) {
-  return <p className="text-xs leading-relaxed text-ink-2">{children}</p>
-}
-
-const FIELD_CLASS =
-  'w-full rounded-md border border-line bg-surface-2 px-3 py-2 text-sm text-ink-1 outline-none focus:border-ink-3'
 
 function LanguageSection() {
   const t = useT()
@@ -203,7 +193,12 @@ function IcsSection() {
 
   if (!user) return null
 
-  const url = `${window.location.origin}/export/ics?token=${encodeURIComponent(user.ics_token)}`
+  // The one API URL built outside the fetch client: the worker copies it into a
+  // calendar app, so it must be absolute. §7 v1.11 puts it under the API prefix
+  // like every other endpoint — `/healthz` is the sole root-level exception.
+  const url = `${window.location.origin}${API_BASE}/export/ics?token=${encodeURIComponent(
+    user.ics_token,
+  )}`
 
   const copy = () => {
     void navigator.clipboard

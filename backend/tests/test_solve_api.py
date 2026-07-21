@@ -38,7 +38,7 @@ def _future_monday(weeks_ahead: int = 2) -> dt.date:
 
 
 def login(client: TestClient, username: str) -> None:
-    resp = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+    resp = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
@@ -115,14 +115,14 @@ def test_infeasible_persists_nothing_and_names_blockers(session: DbSession) -> N
 def test_admin_solve_requires_admin(client: TestClient, session: DbSession) -> None:
     create_full_roster(session)
     login(client, "pasha")  # a plain worker
-    resp = client.post("/admin/solve", params={"week": _future_monday().isoformat()})
+    resp = client.post("/api/admin/solve", params={"week": _future_monday().isoformat()})
     assert resp.status_code == 403
 
 
 def test_admin_solve_returns_objective_breakdown(client: TestClient, session: DbSession) -> None:
     create_full_roster(session)
     login(client, "mattia")  # the visible admin
-    resp = client.post("/admin/solve", params={"week": _future_monday().isoformat()})
+    resp = client.post("/api/admin/solve", params={"week": _future_monday().isoformat()})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] in ("optimal", "feasible")
@@ -134,7 +134,7 @@ def test_admin_solve_by_root_is_allowed(client: TestClient, session: DbSession) 
     """Root inherits admin (§5), so Matteo may trigger a solve."""
     create_full_roster(session)
     login(client, "matteo")
-    resp = client.post("/admin/solve", params={"week": _future_monday().isoformat()})
+    resp = client.post("/api/admin/solve", params={"week": _future_monday().isoformat()})
     assert resp.status_code == 200
 
 
@@ -142,7 +142,7 @@ def test_admin_solve_rejects_non_monday(client: TestClient, session: DbSession) 
     create_full_roster(session)
     login(client, "mattia")
     tuesday = _future_monday() + dt.timedelta(days=1)
-    resp = client.post("/admin/solve", params={"week": tuesday.isoformat()})
+    resp = client.post("/api/admin/solve", params={"week": tuesday.isoformat()})
     assert resp.status_code == 422
     assert resp.json()["detail"] == "week_not_monday"
 
@@ -152,7 +152,7 @@ def test_solve_closes_submission_window(client: TestClient, session: DbSession) 
     create_full_roster(session)
     monday = _future_monday()
     login(client, "mattia")
-    client.post("/admin/solve", params={"week": monday.isoformat()})
+    client.post("/api/admin/solve", params={"week": monday.isoformat()})
 
     week = session.scalar(select(Week).where(Week.monday_date == monday))
     assert week is not None and is_submittable(week) is False
@@ -172,7 +172,7 @@ def test_early_solve_closes_window_for_post_and_delete_over_http(
     # A worker submits while the window is genuinely open (well before Sun 17:00).
     login(client, "pasha")
     created = client.post(
-        "/constraints",
+        "/api/constraints",
         json={"week": monday.isoformat(), "day": "wed", "slot": "am", "kind": "soft"},
     )
     assert created.status_code == 201, created.text
@@ -180,20 +180,20 @@ def test_early_solve_closes_window_for_post_and_delete_over_http(
 
     # Admin "Generate now" ahead of the natural deadline: stamps solved_at, SOLVED.
     login(client, "mattia")
-    assert client.post("/admin/solve", params={"week": monday.isoformat()}).status_code == 200
+    assert client.post("/api/admin/solve", params={"week": monday.isoformat()}).status_code == 200
     week = session.scalar(select(Week).where(Week.monday_date == monday))
     assert week is not None and week.status is WeekStatus.SOLVED and week.solved_at is not None
 
     # POST and DELETE now agree: both refuse the closed window.
     login(client, "pasha")
     post_after = client.post(
-        "/constraints",
+        "/api/constraints",
         json={"week": monday.isoformat(), "day": "thu", "slot": "pm", "kind": "soft"},
     )
     assert post_after.status_code == 409
     assert post_after.json()["detail"] == "week_closed"
 
-    delete_after = client.delete(f"/constraints/{constraint_id}")
+    delete_after = client.delete(f"/api/constraints/{constraint_id}")
     assert delete_after.status_code == 409
     assert delete_after.json()["detail"] == "week_closed"
 
@@ -203,7 +203,7 @@ def test_admin_solve_writes_an_audit_row(client: TestClient, session: DbSession)
     create_full_roster(session)
     monday = _future_monday()
     login(client, "mattia")
-    assert client.post("/admin/solve", params={"week": monday.isoformat()}).status_code == 200
+    assert client.post("/api/admin/solve", params={"week": monday.isoformat()}).status_code == 200
 
     week = session.scalar(select(Week).where(Week.monday_date == monday))
     rows = session.scalars(
@@ -225,7 +225,7 @@ def test_manual_feasible_solve_parks_in_solved_invisible_no_fanout(
     monday = _future_monday()
 
     login(client, "mattia")
-    resp = client.post("/admin/solve", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/solve", params={"week": monday.isoformat()})
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] in ("optimal", "feasible")
 
@@ -234,13 +234,13 @@ def test_manual_feasible_solve_parks_in_solved_invisible_no_fanout(
 
     # The worker sees nothing yet — the draft is not leaked before publish.
     login(client, "pasha")
-    worker_grid = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    worker_grid = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
     assert worker_grid["status"] == "solved"
     assert worker_grid["assignments"] == []
 
     # The admin may preview the solved grid.
     login(client, "mattia")
-    admin_grid = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    admin_grid = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
     assert admin_grid["assignments"], "admin previews the solved schedule"
 
     # No publish fan-out: `solved` never triggers §10 notifications.
@@ -278,15 +278,15 @@ def test_locked_week_resolve_refused_preserves_published_rows(
     create_full_roster(session)
     monday = _future_monday()
     login(client, "mattia")
-    assert client.post("/admin/solve", params={"week": monday.isoformat()}).status_code == 200
-    assert client.post("/admin/publish", params={"week": monday.isoformat()}).status_code == 200
+    assert client.post("/api/admin/solve", params={"week": monday.isoformat()}).status_code == 200
+    assert client.post("/api/admin/publish", params={"week": monday.isoformat()}).status_code == 200
 
     week = session.scalar(select(Week).where(Week.monday_date == monday))
     assert week is not None and week.status is WeekStatus.LOCKED
     before = _generated_snapshot(session, week.id)
     assert before  # the feasible publish left generated rows to preserve
 
-    resp = client.post("/admin/solve", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/solve", params={"week": monday.isoformat()})
     assert resp.status_code == 409
     assert resp.json()["detail"] == ERROR_ALREADY_LOCKED
 
@@ -305,13 +305,13 @@ def test_feasible_solved_week_regenerate_still_allowed(
     create_full_roster(session)
     monday = _future_monday()
     login(client, "mattia")
-    assert client.post("/admin/solve", params={"week": monday.isoformat()}).status_code == 200
+    assert client.post("/api/admin/solve", params={"week": monday.isoformat()}).status_code == 200
 
     week = session.scalar(select(Week).where(Week.monday_date == monday))
     assert week is not None and week.status is WeekStatus.SOLVED
     assert session.scalars(select(SacrificeProposal)).all() == []  # no open conflict
 
-    resp = client.post("/admin/solve", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/solve", params={"week": monday.isoformat()})
     assert resp.status_code == 200, resp.text
 
     session.expire_all()
@@ -364,7 +364,7 @@ def test_infeasible_resolve_clears_the_previous_feasible_schedule(
     )
     # And the week is consequently unpublishable — the backstop actually engages.
     login(client, "mattia")
-    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 409, resp.text
 
 
@@ -437,7 +437,7 @@ def test_publish_refuses_pending_sacrifice_even_with_solver_rows_present(
     )
 
     login(client, "mattia")
-    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 409, resp.text
     assert resp.json()["detail"] == ERROR_SACRIFICE_PENDING
 
@@ -466,13 +466,13 @@ def test_publish_allowed_once_the_pending_proposal_is_resolved(
     )
 
     login(client, "mattia")
-    assert client.post("/admin/publish", params={"week": monday.isoformat()}).status_code == 409
+    assert client.post("/api/admin/publish", params={"week": monday.isoformat()}).status_code == 409
 
     login(client, "pasha")
-    assert client.post(f"/sacrifice/{proposal.id}/decline").status_code == 200
+    assert client.post(f"/api/sacrifice/{proposal.id}/decline").status_code == 200
 
     login(client, "mattia")
-    resp = client.post("/admin/publish", params={"week": monday.isoformat()})
+    resp = client.post("/api/admin/publish", params={"week": monday.isoformat()})
     assert resp.status_code == 200, resp.text
 
     session.expire_all()

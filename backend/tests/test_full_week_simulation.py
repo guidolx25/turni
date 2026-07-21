@@ -54,13 +54,13 @@ def _future_monday(weeks_ahead: int = 2) -> dt.date:
 
 
 def login(client: TestClient, username: str) -> None:
-    resp = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+    resp = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
 def _submit(client: TestClient, monday: dt.date, day: str, slot: str, kind: str) -> None:
     resp = client.post(
-        "/constraints",
+        "/api/constraints",
         json={"week": monday.isoformat(), "day": day, "slot": slot, "kind": kind},
     )
     assert resp.status_code == 201, resp.text
@@ -95,8 +95,9 @@ def _assert_published_week_is_sound(
     assert week is not None and week.status is WeekStatus.LOCKED
 
     login(client, "amir")  # an uninvolved worker
-    assert any(n["event_type"] == "schedule_published" for n in client.get("/notifications").json())
-    grid = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    feed = client.get("/api/notifications").json()
+    assert any(n["event_type"] == "schedule_published" for n in feed)
+    grid = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
     assert grid["status"] == "locked"
     _assert_h1_weekday_coverage(grid["assignments"])
 
@@ -104,7 +105,7 @@ def _assert_published_week_is_sound(
     login(client, "pasha")
     assert (
         client.post(
-            "/constraints",
+            "/api/constraints",
             json={"week": monday.isoformat(), "day": "mon", "slot": "am", "kind": "hard"},
         ).status_code
         == 409  # week_closed
@@ -124,18 +125,18 @@ def test_full_week_submissions_to_publish(client: TestClient, session: DbSession
     _submit_the_week(client, monday)
 
     # The week is materialised, open, with submissions visible to their owner.
-    weeks = client.get("/weeks").json()
+    weeks = client.get("/api/weeks").json()
     assert any(w["monday_date"] == monday.isoformat() and w["status"] == "open" for w in weeks)
-    assert len(client.get("/constraints", params={"week": monday.isoformat()}).json()) == 1
+    assert len(client.get("/api/constraints", params={"week": monday.isoformat()}).json()) == 1
 
     login(client, "mattia")
-    solve = client.post("/admin/solve", params={"week": monday.isoformat()})
+    solve = client.post("/api/admin/solve", params={"week": monday.isoformat()})
     assert solve.status_code == 200, solve.text
     assert solve.json()["status"] in ("optimal", "feasible")
     # §2.2 S1: the three soft rest requests are jointly satisfiable this week.
     assert solve.json()["objective"]["soft_unmet"] == 0
 
-    assert client.post("/admin/publish", params={"week": monday.isoformat()}).status_code == 200
+    assert client.post("/api/admin/publish", params={"week": monday.isoformat()}).status_code == 200
     _assert_published_week_is_sound(client, session, monday)
 
 
@@ -168,7 +169,7 @@ def test_full_week_real_sacrifice_propose_accept_resolve(
 
     # 1. Solve → INFEASIBLE, and the core names the worker who blocks it (§8).
     login(client, "mattia")
-    solve = client.post("/admin/solve", params={"week": monday.isoformat()})
+    solve = client.post("/api/admin/solve", params={"week": monday.isoformat()})
     assert solve.status_code == 200, solve.text
     assert solve.json()["status"] == "infeasible"
     assert any(
@@ -185,10 +186,10 @@ def test_full_week_real_sacrifice_propose_accept_resolve(
 
     # 3. He reads the offer off his own notifications and accepts it over HTTP.
     login(client, "pasha")
-    notes = client.get("/notifications").json()
+    notes = client.get("/api/notifications").json()
     proposed = next(n for n in notes if n["event_type"] == "sacrifice_proposed")
     assert proposed["payload"]["proposed_free_day"] == "fri"
-    accept = client.post(f"/sacrifice/{proposed['payload']['proposal_id']}/accept")
+    accept = client.post(f"/api/sacrifice/{proposed['payload']['proposal_id']}/accept")
     assert accept.status_code == 200, accept.text
     assert accept.json()["status"] == "accepted"
 
@@ -196,7 +197,7 @@ def test_full_week_real_sacrifice_propose_accept_resolve(
     _assert_published_week_is_sound(client, session, monday)
 
     login(client, "pasha")
-    grid = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    grid = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
     mine = [a for a in grid["assignments"] if a["user_id"] == roster["pasha"].id]
 
     # H7 in full: ZERO Friday slots. This is the whole point of the trade.
@@ -215,7 +216,9 @@ def test_full_week_real_sacrifice_propose_accept_resolve(
 
     # §10: he is told the outcome, naming the day he took as rest instead.
     resolved = next(
-        n for n in client.get("/notifications").json() if n["event_type"] == "sacrifice_resolved"
+        n
+        for n in client.get("/api/notifications").json()
+        if n["event_type"] == "sacrifice_resolved"
     )
     assert resolved["payload"]["free_day"] == "fri"
 
@@ -239,7 +242,7 @@ def test_full_week_sacrifice_accepted_leads_to_publish(
     _submit_the_week(client, monday)
 
     login(client, "mattia")
-    assert client.post("/admin/solve", params={"week": monday.isoformat()}).status_code == 200
+    assert client.post("/api/admin/solve", params={"week": monday.isoformat()}).status_code == 200
 
     # The §2.3 conversation is opened with Pasha (see module docstring on seeding).
     week = get_or_create_week(session, monday)
@@ -253,16 +256,16 @@ def test_full_week_sacrifice_accepted_leads_to_publish(
 
     # While the offer is open the week cannot be published (§3.3).
     login(client, "mattia")
-    blocked = client.post("/admin/publish", params={"week": monday.isoformat()})
+    blocked = client.post("/api/admin/publish", params={"week": monday.isoformat()})
     assert blocked.status_code == 409
     assert blocked.json()["detail"] == "sacrifice_pending"
 
     # Pasha reads the offer off his notifications and accepts it.
     login(client, "pasha")
-    notes = client.get("/notifications").json()
+    notes = client.get("/api/notifications").json()
     proposed = next(n for n in notes if n["event_type"] == "sacrifice_proposed")
     assert proposed["payload"]["proposed_free_day"] == "thu"
-    accept = client.post(f"/sacrifice/{proposed['payload']['proposal_id']}/accept")
+    accept = client.post(f"/api/sacrifice/{proposed['payload']['proposal_id']}/accept")
     assert accept.status_code == 200, accept.text
     assert accept.json()["status"] == "accepted"
 
@@ -271,7 +274,7 @@ def test_full_week_sacrifice_accepted_leads_to_publish(
     # The sacrifice he made is honored: zero Thursday slots, and H3 still holds
     # (his free day MOVED to Thursday — Friday is worked, never rested).
     login(client, "pasha")
-    grid = client.get("/schedule", params={"week": monday.isoformat()}).json()
+    grid = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
     mine = [a for a in grid["assignments"] if a["user_id"] == roster["pasha"].id]
     assert [a for a in mine if a["day"] == "thu"] == []
     assert [a for a in mine if a["day"] == "fri"], "H3: Friday is always worked"
@@ -308,7 +311,7 @@ def test_full_week_friday_conflict_with_infeasible_probe_ends_in_admin_escalatio
     _submit(client, monday, "fri", "full_day", "hard")  # and the jolly cannot cover it
 
     login(client, "mattia")
-    solve = client.post("/admin/solve", params={"week": monday.isoformat()})
+    solve = client.post("/api/admin/solve", params={"week": monday.isoformat()})
     assert solve.status_code == 200, solve.text
     assert solve.json()["status"] == "infeasible"
     assert solve.json()["blocking_constraints"], "§8: the core must name the conflict"
@@ -335,7 +338,7 @@ def test_full_week_friday_conflict_with_infeasible_probe_ends_in_admin_escalatio
         ).all()
         == []
     )
-    assert client.post("/admin/publish", params={"week": monday.isoformat()}).status_code == 409
+    assert client.post("/api/admin/publish", params={"week": monday.isoformat()}).status_code == 409
 
     session.expire_all()
     week = session.scalar(select(Week).where(Week.monday_date == monday))
@@ -343,8 +346,9 @@ def test_full_week_friday_conflict_with_infeasible_probe_ends_in_admin_escalatio
 
     # The worker sees no schedule and was told nothing was resolved on his behalf.
     login(client, "pasha")
-    assert client.get("/schedule", params={"week": monday.isoformat()}).json()["assignments"] == []
+    grid = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
+    assert grid["assignments"] == []
     assert not any(
         n["event_type"] in ("sacrifice_proposed", "sacrifice_resolved")
-        for n in client.get("/notifications").json()
+        for n in client.get("/api/notifications").json()
     )

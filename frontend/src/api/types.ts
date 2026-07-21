@@ -181,3 +181,149 @@ export interface SacrificeProposalOut {
   conflict: ConflictItem[] | null
   created_at: string
 }
+
+/* -- admin (§7 `-- admin --`) -- */
+
+/** §8 solve outcome. OPTIMAL/FEASIBLE carry the objective; INFEASIBLE the core. */
+export type SolverStatus = 'optimal' | 'feasible' | 'infeasible'
+
+export interface ObjectiveBreakdownOut {
+  soft_unmet: number
+  alternation_breaks: number
+  fairness_deviation: number
+  spread_shared_pairs: number
+  jolly_days: number
+  weighted_total: number
+}
+
+/** One hard request named by the §8 assumption literals as blocking (§2.3). */
+export interface BlockingConstraintOut {
+  worker_id: number
+  day: Day
+  slot: ConstraintSlot
+  kind: ConstraintKind
+}
+
+export interface SolveResultOut {
+  // A plain string on the wire: an unrecognised status must render as "unknown",
+  // never crash the panel, so the union is narrowed at render time.
+  status: string
+  solve_seconds: number
+  objective: ObjectiveBreakdownOut | null
+  blocking_constraints: BlockingConstraintOut[]
+}
+
+/**
+ * §7 `POST /admin/override` body. The slot is named by its §6 natural key;
+ * `assignment_id` disambiguates the H5 weekend slots, which seat two spiaggini
+ * and so are not uniquely keyed by (week, day, slot, role).
+ */
+export interface OverrideIn {
+  week: string
+  day: Day
+  slot: AssignmentSlot
+  role: AssignmentRole
+  user_id: number
+  assignment_id?: number
+}
+
+/** One §2.1 hard rule the override left standing — data, rendered by §9. */
+export interface ViolationOut {
+  rule: string
+  user_id: number
+  day: Day | null
+  slot: AssignmentSlot | null
+}
+
+export interface OverrideOut {
+  assignment: ScheduleAssignmentOut
+  previous_user_id: number | null
+  new_user_id: number
+  created: boolean
+  violations: ViolationOut[]
+}
+
+export interface AdminConstraintOut {
+  id: number
+  user_id: number
+  user_name: string
+  day: Day
+  slot: ConstraintSlot
+  kind: ConstraintKind
+  note: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AdminConstraintsOut {
+  week: string
+  status: WeekStatus
+  constraints: AdminConstraintOut[]
+}
+
+/**
+ * One §6 `audit_log` row. `actor_id`/`actor_name` are null exactly when
+ * `system` is true (§6: cron solve, 48 h swap expiry, nightly backup — there is
+ * deliberately no system user row, and a null actor is never a vanished human).
+ */
+export interface AuditEntryOut {
+  id: number
+  actor_id: number | null
+  actor_name: string | null
+  system: boolean
+  action: string
+  entity: string
+  entity_id: number | null
+  payload: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface AuditPageOut {
+  total: number
+  limit: number
+  offset: number
+  entries: AuditEntryOut[]
+}
+
+export interface AuditQuery {
+  limit: number
+  offset: number
+  action: string | null
+  entity: string | null
+}
+
+/* -- root (§7 `-- root --`) -- */
+
+/** `GET /root/users`. Inherits UserOut, so `is_root` is absent here too (§5). */
+export interface UserAdminOut extends UserOut {
+  created_at: string
+}
+
+/** `POST /root/users`. No `is_root` (§5: root-ness is seeded, never minted). */
+export interface UserCreateIn {
+  username: string
+  display_name: string
+  role: UserRole
+  email: string | null
+  is_admin: boolean
+  language: Language
+  password: string
+}
+
+/**
+ * `PATCH /root/users/{id}`. Partial: an absent field is left alone. `active`
+ * is how a user is removed — §5: never hard-deleted, only deactivated.
+ */
+export interface UserUpdateIn {
+  display_name?: string
+  role?: UserRole
+  email?: string | null
+  is_admin?: boolean
+  language?: Language
+  active?: boolean
+}
+
+/** `POST /root/users/{id}/password` — a reset, so no current password. */
+export interface PasswordResetIn {
+  new_password: string
+}

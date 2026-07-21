@@ -37,14 +37,14 @@ _PAST_MONDAY = dt.date(2020, 1, 6)  # deadline 2020-01-05 17:00 — long closed.
 
 
 def login(client: TestClient, username: str) -> None:
-    resp = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+    resp = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
 def _post(client: TestClient, monday: dt.date, **body: object):
     payload = {"week": monday.isoformat(), "day": "mon", "slot": "am", "kind": "hard"}
     payload.update(body)
-    return client.post("/constraints", json=payload)
+    return client.post("/api/constraints", json=payload)
 
 
 # --- auth ------------------------------------------------------------------
@@ -52,7 +52,8 @@ def _post(client: TestClient, monday: dt.date, **body: object):
 
 def test_constraints_require_auth(client: TestClient) -> None:
     assert (
-        client.get("/constraints", params={"week": _future_monday().isoformat()}).status_code == 401
+        client.get("/api/constraints", params={"week": _future_monday().isoformat()}).status_code
+        == 401
     )
     assert _post(client, _future_monday()).status_code == 401
 
@@ -77,7 +78,7 @@ def test_post_then_get_round_trips(client: TestClient, session: DbSession) -> No
     )
     assert "is_root" not in body
 
-    got = client.get("/constraints", params={"week": monday.isoformat()})
+    got = client.get("/api/constraints", params={"week": monday.isoformat()})
     assert got.status_code == 200
     assert [(c["day"], c["slot"]) for c in got.json()] == [("tue", "pm")]
 
@@ -94,7 +95,7 @@ def test_upsert_updates_in_place_no_duplicate(client: TestClient, session: DbSes
     assert first.json()["id"] == second.json()["id"]  # same row
     assert second.json()["kind"] == "soft"
 
-    rows = client.get("/constraints", params={"week": monday.isoformat()}).json()
+    rows = client.get("/api/constraints", params={"week": monday.isoformat()}).json()
     assert len(rows) == 1
 
 
@@ -110,7 +111,7 @@ def test_full_day_supersedes_am_and_pm(client: TestClient, session: DbSession) -
     _post(client, monday, day="wed", slot="pm", kind="hard")
     _post(client, monday, day="wed", slot="full_day", kind="hard")
 
-    rows = client.get("/constraints", params={"week": monday.isoformat()}).json()
+    rows = client.get("/api/constraints", params={"week": monday.isoformat()}).json()
     wed = [c for c in rows if c["day"] == "wed"]
     assert [c["slot"] for c in wed] == ["full_day"]  # am + pm cleared
 
@@ -123,7 +124,7 @@ def test_am_supersedes_full_day(client: TestClient, session: DbSession) -> None:
     _post(client, monday, day="thu", slot="full_day", kind="hard")
     _post(client, monday, day="thu", slot="am", kind="hard")
 
-    rows = client.get("/constraints", params={"week": monday.isoformat()}).json()
+    rows = client.get("/api/constraints", params={"week": monday.isoformat()}).json()
     thu = [c for c in rows if c["day"] == "thu"]
     assert [c["slot"] for c in thu] == ["am"]  # full_day cleared
 
@@ -140,8 +141,8 @@ def test_multi_week_submission_is_isolated(client: TestClient, session: DbSessio
     _post(client, wk1, day="mon", slot="am")
     _post(client, wk2, day="fri", slot="pm")
 
-    r1 = client.get("/constraints", params={"week": wk1.isoformat()}).json()
-    r2 = client.get("/constraints", params={"week": wk2.isoformat()}).json()
+    r1 = client.get("/api/constraints", params={"week": wk1.isoformat()}).json()
+    r2 = client.get("/api/constraints", params={"week": wk2.isoformat()}).json()
     assert [(c["day"], c["slot"]) for c in r1] == [("mon", "am")]
     assert [(c["day"], c["slot"]) for c in r2] == [("fri", "pm")]
 
@@ -191,8 +192,8 @@ def test_delete_own_constraint(client: TestClient, session: DbSession) -> None:
     monday = _future_monday()
     cid = _post(client, monday, day="mon", slot="am").json()["id"]
 
-    assert client.delete(f"/constraints/{cid}").status_code == 204
-    assert client.get("/constraints", params={"week": monday.isoformat()}).json() == []
+    assert client.delete(f"/api/constraints/{cid}").status_code == 204
+    assert client.get("/api/constraints", params={"week": monday.isoformat()}).json() == []
 
 
 def test_cannot_delete_another_users_constraint(client: TestClient, session: DbSession) -> None:
@@ -209,7 +210,7 @@ def test_cannot_delete_another_users_constraint(client: TestClient, session: DbS
     session.commit()
 
     login(client, "amir")
-    resp = client.delete(f"/constraints/{row.id}")
+    resp = client.delete(f"/api/constraints/{row.id}")
     assert resp.status_code == 404
     # Still present for the owner.
     assert session.get(Constraint, row.id) is not None
@@ -218,7 +219,7 @@ def test_cannot_delete_another_users_constraint(client: TestClient, session: DbS
 def test_delete_missing_constraint_is_404(client: TestClient, session: DbSession) -> None:
     create_user(session, "pasha")
     login(client, "pasha")
-    assert client.delete("/constraints/9999").status_code == 404
+    assert client.delete("/api/constraints/9999").status_code == 404
 
 
 # --- /weeks ----------------------------------------------------------------
@@ -230,7 +231,7 @@ def test_weeks_lists_deadline_and_status(client: TestClient, session: DbSession)
     monday = _future_monday()
     _post(client, monday, day="mon", slot="am")  # materialises the week
 
-    weeks = client.get("/weeks").json()
+    weeks = client.get("/api/weeks").json()
     assert len(weeks) == 1
     (wk,) = weeks
     assert wk["monday_date"] == monday.isoformat()
@@ -240,4 +241,4 @@ def test_weeks_lists_deadline_and_status(client: TestClient, session: DbSession)
 
 
 def test_weeks_requires_auth(client: TestClient) -> None:
-    assert client.get("/weeks").status_code == 401
+    assert client.get("/api/weeks").status_code == 401

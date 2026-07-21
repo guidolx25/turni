@@ -40,6 +40,19 @@ export function weekRangeLabel(monday: string, locale: Language): string {
   }).formatRange(start, end)
 }
 
+/**
+ * An absolute instant as a localized date+time. Pinned to Europe/Rome: §3 makes
+ * that the scheduling timezone, and an audit line read on a phone abroad must
+ * still say when the thing happened *here*.
+ */
+export function dateTimeLabel(iso: string, locale: Language): string {
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'Europe/Rome',
+  }).format(new Date(iso))
+}
+
 export interface Countdown {
   days: number
   hours: number

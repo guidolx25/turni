@@ -3,22 +3,15 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-// Spec §7 mounts the API at root (no /api prefix); one proxy entry per prefix.
+// Spec §7 (v1.11) namespaces the whole API under /api, so dev needs exactly one
+// proxy entry. It used to need one per top-level router, and those entries were
+// also what made `/swaps` ambiguous in dev: the proxy claimed it before
+// react-router could, so the client route and the endpoint fought over the name.
+//
+// `/healthz` is deliberately absent. It lives outside /api (§11: the host's
+// probe points at it) and the frontend never calls it.
 const backend = { target: 'http://127.0.0.1:8000', changeOrigin: true }
-const apiPrefixes = [
-  '/auth',
-  '/me',
-  '/weeks',
-  '/schedule',
-  '/export',
-  '/constraints',
-  '/swaps',
-  '/notifications',
-  '/sacrifice',
-  '/admin',
-  '/root',
-  '/healthz',
-]
+const apiPrefixes = ['/api']
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

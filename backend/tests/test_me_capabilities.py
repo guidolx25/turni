@@ -40,7 +40,7 @@ EXPECTED_KEYS = frozenset(ADMIN_ROWS + ROOT_ROWS)
 
 
 def login(client: TestClient, username: str, password: str = PASSWORD) -> None:
-    response = client.post("/auth/login", json={"username": username, "password": password})
+    response = client.post("/api/auth/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
 
 
@@ -56,7 +56,7 @@ def expected_capabilities(user: User) -> dict[str, bool]:
 
 
 def get_me(client: TestClient) -> dict[str, object]:
-    response = client.get("/me")
+    response = client.get("/api/me")
     assert response.status_code == 200, response.text
     return response.json()
 

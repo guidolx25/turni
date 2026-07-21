@@ -1,6 +1,6 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.10 (2026-07-21) · **Status:** Approved for build
+**Version:** 1.11 (2026-07-21) · **Status:** Approved for build
 **v1.5:** §6 `sacrifice_proposals.conflict_note` (prose) → `conflict` (structured
 §8 unsat core, `[{worker_id, day, slot}]`), so conflicts localize at render time (§9).
 **v1.6:** the accepted `sacrifice_proposals` row is the §2.1 H3 **grant of record** —
@@ -16,6 +16,10 @@ single never-autoscaled instance, secrets, `/healthz`, a pinnable proxy peer)
 instead of naming vendors — the host is a deployment decision, not a design one.
 **v1.10:** §11's ICS slot hours are the establishment's real ones — AM 08:00–14:00,
 PM 14:00–20:00 (user-supplied) — replacing the v1.7 placeholders.
+**v1.11:** §7's API is namespaced under `/api`, so it no longer shares a URL
+namespace with the §9 client routes (`/swaps` was both a view and an endpoint).
+`/healthz` (§11) is deliberately outside the prefix, as infrastructure rather than
+API surface; `/export/ics` is inside it, being API surface a human happens to copy.
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -200,6 +204,21 @@ solver_state(user_id PK, last_worked_slot ENUM(am,pm), last_worked_date)
 
 ## 7. API surface (FastAPI, session-cookie auth)
 
+**Every path below is mounted under `/api`** (v1.11). The prefix is written once
+at the mount point; the paths are listed unprefixed because that is their identity
+— `/api` is where the API lives, not part of each endpoint's name.
+
+The prefix exists to keep the API disjoint from the §9 client routes. Without it
+the two shared a namespace: `/swaps` was both a react-router view and a real
+endpoint, and a server serving both (§9, one origin) could only tell them apart by
+inspecting the request's `Accept` header — making correct routing depend on a
+header any proxy is free to rewrite. A prefix makes the sets disjoint by
+construction.
+
+`GET /healthz` (§11) is deliberately **outside** the prefix, and is the only such
+route. It is infrastructure, not API surface: the host's health probe points at
+it, and that probe should not have to track the application's URL layout.
+
 ```
 POST   /auth/login            POST /auth/logout           GET /me
 PATCH  /me/settings           (language, email_notifications, password change)
@@ -223,6 +242,11 @@ GET    /export/ics            (per-user calendar feed; authenticated by the
                                users.ics_token bearer credential (v1.7), compared
                                in constant time — never by session cookie, so
                                calendar apps can poll it)
+                              -- v1.11: under /api like the rest, i.e.
+                              -- /api/export/ics?token=…. It is the one API URL a
+                              -- human handles — workers paste it into a calendar
+                              -- app — but it is API surface, so it follows the
+                              -- prefix. /healthz stays the only exception.
 
 GET    /constraints?week=     POST /constraints           DELETE /constraints/{id}
        (multi-week: any week with status=open)

@@ -41,7 +41,7 @@ _WINTER_MONDAY = dt.date(2027, 1, 11)
 
 
 def login(client: TestClient, username: str) -> None:
-    resp = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+    resp = client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
@@ -54,7 +54,7 @@ def _publish(session: DbSession, roster: dict[str, User], monday: dt.date) -> No
 
 
 def _feed(client: TestClient, token: str) -> str:
-    resp = client.get("/export/ics", params={"token": token})
+    resp = client.get("/api/export/ics", params={"token": token})
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"].startswith("text/calendar")
     return resp.text
@@ -137,7 +137,7 @@ def test_the_feed_needs_no_session(client: TestClient, session: DbSession) -> No
 def test_an_unknown_token_is_404(client: TestClient, session: DbSession, token: str) -> None:
     roster = create_full_roster(session)
     _publish(session, roster, _SUMMER_MONDAY)
-    resp = client.get("/export/ics", params={"token": token})
+    resp = client.get("/api/export/ics", params={"token": token})
     assert resp.status_code in (404, 422)
     if resp.status_code == 404:
         assert resp.json()["detail"] == "feed_not_found"
@@ -157,7 +157,7 @@ def test_a_deactivated_owners_valid_token_is_404(client: TestClient, session: Db
     amir.active = False
     session.commit()
 
-    resp = client.get("/export/ics", params={"token": token})
+    resp = client.get("/api/export/ics", params={"token": token})
     assert resp.status_code == 404
     assert resp.json()["detail"] == "feed_not_found"
 
@@ -235,7 +235,7 @@ def test_me_carries_the_callers_own_feed_token(client: TestClient, session: DbSe
     the two /me-only additions, so a future field cannot arrive unnoticed."""
     roster = create_full_roster(session)
     login(client, "pasha")
-    body = client.get("/me").json()
+    body = client.get("/api/me").json()
 
     assert body["ics_token"] == roster["pasha"].ics_token
     assert set(body) == set(UserOut.model_fields) | {"capabilities", "ics_token"}
@@ -248,7 +248,7 @@ def test_no_other_users_token_is_ever_serialized(client: TestClient, session: Db
     if the token can leak anywhere, it leaks here."""
     create_full_roster(session)
     login(client, "matteo")  # root: sees the most
-    body = client.get("/root/users").json()
+    body = client.get("/api/root/users").json()
     assert body, "the listing must not be empty, or this proves nothing"
 
     serialized = repr(body)

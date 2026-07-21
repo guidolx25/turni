@@ -17,6 +17,9 @@ export const en = {
   'common.remove': 'Remove',
   'common.copy': 'Copy',
   'common.copied': 'Copied',
+  'common.previous': 'Previous',
+  'common.next': 'Next',
+  'common.romeTime': 'All times are Rome time.',
 
   'nav.schedule': 'Schedule',
   'nav.swaps': 'Swaps',
@@ -24,6 +27,8 @@ export const en = {
   'nav.notifications': 'Notifications',
   'nav.settings': 'Settings',
   'nav.soon': 'Coming soon',
+  'nav.admin': 'Admin',
+  'nav.root': 'Users',
 
   'shell.logout': 'Log out',
   'shell.loggedInAs': 'Signed in as {name}',
@@ -61,6 +66,7 @@ export const en = {
   'slot.full_day': 'All day',
   'role.bagnino': 'Lifeguard',
   'role.spiaggino': 'Beach worker',
+  'role.jolly': 'Jolly (both roles)',
 
   'swaps.title': 'Swaps',
   'swaps.create.title': 'New swap',
@@ -194,6 +200,143 @@ export const en = {
   'settings.ics.regenerateConfirm': 'Confirm regeneration?',
   'settings.ics.regenerated': 'New address generated.',
 
+  'admin.title': 'Admin',
+  'admin.intro':
+    'Generate, publish and hand-correct the schedule. Everything done here is recorded.',
+  'admin.noWeeks': 'No week available.',
+
+  'admin.solve.title': 'Generate schedule',
+  'admin.solve.help':
+    'Generating computes the schedule but does not make it visible: publishing is a separate step.',
+  'admin.solve.generate': 'Generate now',
+  'admin.solve.working': 'Solving…',
+  'admin.solve.confirm':
+    '“Generate now” closes this week’s request window early: from that moment nobody can edit their requests. The schedule is left for review and is not published.',
+  'admin.solve.confirmAction': 'Close the window and generate',
+  'admin.solve.result': 'Solve result',
+  'admin.solve.status.optimal': 'Optimal solution',
+  'admin.solve.status.feasible': 'Valid solution',
+  'admin.solve.status.infeasible': 'No possible solution',
+  'admin.solve.status.unknown': 'Unrecognised result',
+  'admin.solve.duration': 'Solved in {seconds} s',
+  'admin.solve.objective': 'Objective breakdown',
+  'admin.solve.objective.softUnmet': 'Unmet preferences',
+  'admin.solve.objective.alternation': 'Alternation breaks',
+  'admin.solve.objective.fairness': 'Morning/afternoon imbalance',
+  'admin.solve.objective.spread': 'Weekend pairs sharing a free day',
+  'admin.solve.objective.jollyDays': 'Days worked by the jolly',
+  'admin.solve.objective.total': 'Weighted total',
+  'admin.solve.blocking': 'Conflicting binding requests',
+  'admin.solve.blocking.help':
+    'No schedule satisfies all of these together. If the conflict falls on a Friday for a core worker, they are offered a free-day move; otherwise the decision stays with you.',
+  'admin.solve.blocking.item': '{who}: {day}, {slot}',
+  'admin.solve.blocking.unknownWorker': 'A worker',
+  'admin.solve.infeasibleNote': 'A week with no solution can never be published.',
+
+  'admin.publish.title': 'Publish',
+  'admin.publish.help':
+    'Publishing makes the shifts visible to everyone, locks the slots and sends the notifications. After that, changes happen only through a swap or a manual change.',
+  'admin.publish.submit': 'Publish the week',
+  'admin.publish.working': 'Publishing…',
+  'admin.publish.done': 'Week published.',
+  'admin.publish.needsSolved':
+    'You can only publish a week that has been solved and has no open conflict.',
+  'admin.publish.alreadyPublished': 'This week is already published.',
+
+  'admin.override.title': 'Change a shift by hand',
+  'admin.override.help':
+    'Change who covers an already published slot, without going through a peer swap.',
+  'admin.override.needsLocked':
+    'Manual changes apply to published weeks only: an unpublished week is regenerated instead.',
+  'admin.override.noSlots': 'No shift to change in this week.',
+  'admin.override.slot': 'Shift to change',
+  'admin.override.newHolder': 'New person',
+  'admin.override.pick': 'Choose…',
+  'admin.override.slotOption': '{day} {slot} · {role} — {name}',
+  'admin.override.warning':
+    'You are changing an already published schedule that people are relying on. It takes effect immediately, it is recorded, and both the person losing the shift and the person receiving it are notified.',
+  'admin.override.confirmAction': 'Confirm the change',
+  'admin.override.working': 'Applying…',
+  'admin.override.done': 'Shift changed. The people involved have been notified.',
+  'admin.override.violations': 'Rules now broken',
+  'admin.override.violations.help':
+    'The change was applied anyway: the decision is yours. These situations are left for you to sort out by hand.',
+  'admin.override.violation.h2': '{name}: two roles in the same slot ({day}, {slot}).',
+  'admin.override.violation.h3': '{name}: no free day this week.',
+  'admin.override.violation.h4': '{name}: more than one slot on the same day ({day}).',
+  'admin.override.violation.other': '{name}: constraint {rule} is broken.',
+  'admin.override.someone': 'A worker',
+
+  'admin.submissions.title': 'Submitted requests',
+  'admin.submissions.help': 'Every unavailability filed for this week, by person.',
+  'admin.submissions.empty': 'No request for this week.',
+  'admin.submissions.item': '{day} · {slot}',
+
+  'admin.audit.title': 'Audit log',
+  'admin.audit.help': 'Every state change: solves, publications, swaps and manual changes.',
+  'admin.audit.empty': 'No entry in the log.',
+  'admin.audit.systemActor': 'System',
+  'admin.audit.systemHelp':
+    '“System” entries are automated actions with no human actor: the scheduled solve, swap expiry, the nightly backup.',
+  'admin.audit.range': '{from}–{to} of {total}',
+  'admin.audit.filterByAction': 'Filter by action: {action}',
+  'admin.audit.filterByEntity': 'Filter by entity: {entity}',
+  'admin.audit.filtersActive': 'Filters active',
+  'admin.audit.filtersClear': 'Clear the filters',
+  'admin.audit.action.publish': 'Publish',
+  'admin.audit.action.solve': 'Solve',
+  'admin.audit.action.override': 'Manual change',
+  'admin.audit.action.sacrifice': 'Sacrifice',
+  'admin.audit.action.swap': 'Swap',
+  'admin.audit.action.credential': 'Credentials',
+  'admin.audit.action.escalate': 'Escalation',
+  'admin.audit.entity.week': 'Week',
+  'admin.audit.entity.constraint': 'Request',
+  'admin.audit.entity.assignment': 'Shift',
+  'admin.audit.entity.swap_request': 'Swap request',
+  'admin.audit.entity.sacrifice_proposal': 'Sacrifice proposal',
+  'admin.audit.entity.user': 'User',
+
+  'root.title': 'Users',
+  'root.intro': 'Create accounts, edit their details, reset passwords. There is no public signup.',
+  'root.empty': 'No user.',
+  'root.status.active': 'Active',
+  'root.status.inactive': 'Deactivated',
+  'root.badge.admin': 'Admin',
+  'root.field.username': 'Username',
+  'root.field.displayName': 'Display name',
+  'root.field.role': 'Role',
+  'root.field.email': 'Email',
+  'root.field.admin': 'Admin permissions',
+  'root.field.language': 'Language',
+  'root.field.password': 'Initial password',
+  'root.create.title': 'New user',
+  'root.create.submit': 'Create user',
+  'root.create.working': 'Creating…',
+  'root.create.done': 'User created.',
+  'root.edit.open': 'Manage {name}',
+  'root.edit.close': 'Close {name}',
+  'root.edit.title': 'Details',
+  'root.edit.done': 'Changes saved.',
+  'root.deactivate.title': 'Deactivation',
+  'root.deactivate.why':
+    'Accounts are never deleted. Shifts, swaps and the audit log all reference people: deleting one would either destroy the history or make the log lie about who acted. Deactivation is the only removal there is.',
+  'root.deactivate.immediate':
+    'Deactivation is immediate and closes any session already open, not just the next sign-in.',
+  'root.deactivate.submit': 'Deactivate',
+  'root.deactivate.confirmAction': 'Deactivate the account',
+  'root.deactivate.working': 'Deactivating…',
+  'root.deactivate.done': 'Account deactivated.',
+  'root.reactivate.submit': 'Reactivate',
+  'root.reactivate.done': 'Account reactivated.',
+  'root.password.title': 'Reset the password',
+  'root.password.help':
+    'Set a new password for this person. The current one is not required — that is the whole point of a reset.',
+  'root.password.new': 'New password',
+  'root.password.submit': 'Reset the password',
+  'root.password.working': 'Resetting…',
+  'root.password.done': 'Password reset.',
+
   // Backend error codes (§7 `{detail: "snake_case_code"}`) → `errors.<code>`.
   'errors.generic': 'Something went wrong. Please try again.',
   'errors.network': 'No connection. Check your network.',
@@ -206,7 +349,24 @@ export const en = {
   'errors.week_closed': 'The request window for this week is closed.',
   'errors.week_not_solved': 'The week has not been solved yet.',
   'errors.week_already_locked': 'The week is already published.',
-  'errors.week_not_locked': 'Swaps apply to published weeks only.',
+  // Shared by swaps (§4) and admin override (§5/§3.4): both are post-lock
+  // instruments, so the sentence must be true for either caller.
+  'errors.week_not_locked': 'This action applies to published weeks only.',
+  // §5/§3.4 admin override (`app/routers/admin.py`).
+  'errors.override_no_change': 'That person already covers this slot.',
+  'errors.override_ambiguous_slot':
+    'On weekends this slot has two holders: pick the exact shift from the list.',
+  'errors.override_user_not_found': 'Person not found.',
+  'errors.override_user_inactive': 'That person’s account is deactivated.',
+  'errors.override_role_invalid': 'That person cannot cover this role.',
+  'errors.override_row_mismatch': 'That shift has changed — reload the week and try again.',
+  // §5 row 7 root user management (`app/routers/root.py`).
+  'errors.user_not_found': 'User not found.',
+  'errors.username_taken': 'That username is already taken.',
+  // Worded without naming the account: it is only ever returned to the one
+  // caller who already knows which row it is (§5).
+  'errors.last_root_required':
+    'You cannot deactivate the only account that can manage users: nothing would be left to reactivate it.',
   'errors.sacrifice_pending': 'A sacrifice proposal is pending.',
   'errors.sacrifice_not_found': 'Proposal not found.',
   'errors.sacrifice_already_resolved': 'Proposal already resolved.',

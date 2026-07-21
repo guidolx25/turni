@@ -31,7 +31,7 @@ pytestmark = pytest.mark.phase1
 
 
 def login(client: TestClient, username: str, password: str = PASSWORD) -> None:
-    response = client.post("/auth/login", json={"username": username, "password": password})
+    response = client.post("/api/auth/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
 
 
@@ -112,7 +112,7 @@ def test_root_users_endpoint_includes_roots_own_row(
     client = api_client_factory(probe_app)
     login(client, "matteo")
 
-    response = client.get("/root/users")
+    response = client.get("/api/root/users")
 
     assert response.status_code == 200, response.text
     usernames = {row["username"] for row in response.json()}
@@ -133,7 +133,7 @@ def test_root_users_never_serializes_is_root(
     client = api_client_factory(probe_app)
     login(client, "matteo")
 
-    response = client.get("/root/users")
+    response = client.get("/api/root/users")
 
     assert response.status_code == 200, response.text
     rows = response.json()

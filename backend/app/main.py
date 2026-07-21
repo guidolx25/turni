@@ -3,10 +3,15 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.config import settings
+from app.config import API_PREFIX, settings
+from app.deps import DbDep
+from app.logging_config import configure_logging
 from app.routers import (
     admin,
     auth,
@@ -20,12 +25,12 @@ from app.routers import (
     weeks,
 )
 from app.scheduler import build_scheduler
+from app.spa import mount_spa
 
-# Placeholder. Spec §11 requires structured logs and §8 requires solver runs
-# logged with duration + objective values; those messages contain quotes and
-# braces, so real JSON logging needs a formatter that escapes the payload
-# (not an f-string-shaped format). Deferred to the §11 work.
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+# §11 structured logs. Configured at import, which is after uvicorn has installed
+# its own handlers — see `app.logging_config`, which takes those over so request
+# logs join the same JSON stream.
+configure_logging(settings.log_level, json_format=settings.log_json)
 
 logger = logging.getLogger(__name__)
 
@@ -57,21 +62,81 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         scheduler.shutdown(wait=False)
 
 
-app = FastAPI(title="Turni", version="0.1.0", lifespan=lifespan)
-
-app.include_router(auth.router)
-app.include_router(root.router)
-app.include_router(weeks.router)
-app.include_router(constraints.router)
-app.include_router(schedule.router)
-app.include_router(notifications.router)
-app.include_router(sacrifice.router)
-app.include_router(swaps.router)
-app.include_router(ics.router)
-app.include_router(admin.router)
+health_router = APIRouter(tags=["health"])
 
 
-@app.get("/healthz")
-def healthz() -> dict[str, str]:
-    """Health endpoint (spec §11)."""
+def create_app(static_dir: Path | None = None) -> FastAPI:
+    """Build the application.
+
+    A factory rather than a module-level assembly so the SPA wiring can be
+    exercised against a real build directory without a test mutating the
+    process-wide `app` — `mount_spa` registers a catch-all, which on a shared
+    instance would leak into every other suite's 404s.
+
+    `static_dir` defaults to the configured one; §9's single-origin frontend is
+    mounted last, after every router, because the fallback matches everything.
+    """
+    app = FastAPI(title="Turni", version="0.1.0", lifespan=lifespan)
+
+    # §7 (v1.11): the whole API lives under /api. The prefix is applied here,
+    # once, rather than in each router — the routers keep their spec-shaped paths
+    # (/me, /swaps/{id}/accept) and the namespace is a mounting decision.
+    #
+    # It exists to separate the API from the §9 client routes. They previously
+    # shared a namespace, so /swaps was both a react-router view and a real GET
+    # endpoint, and the server had to guess which was meant from the `Accept`
+    # header. A prefix makes the two sets disjoint by construction.
+    api = APIRouter(prefix=API_PREFIX)
+    api.include_router(auth.router)
+    api.include_router(root.router)
+    api.include_router(weeks.router)
+    api.include_router(constraints.router)
+    api.include_router(schedule.router)
+    api.include_router(notifications.router)
+    api.include_router(sacrifice.router)
+    api.include_router(swaps.router)
+    api.include_router(ics.router)
+    api.include_router(admin.router)
+    app.include_router(api)
+
+    # §11: deliberately NOT under /api. This is infrastructure — the host's
+    # health probe points at it, and that probe should not have to know the
+    # application's URL layout. It is also the one endpoint that must keep
+    # answering while the API is the thing that is broken.
+    app.include_router(health_router)
+
+    resolved_static = settings.static_dir if static_dir is None else static_dir
+    if resolved_static is not None:
+        mount_spa(app, resolved_static)
+
+    return app
+
+
+@health_router.get("/healthz")
+def healthz(db: DbDep) -> dict[str, str]:
+    """Health endpoint (spec §11).
+
+    Answers a question the host's probe can act on: not merely "is the process
+    listening" (the socket accepting already proves that) but "can this process
+    reach its database". §11 puts SQLite on a persistent volume, and the failure
+    this endpoint exists to catch is the volume not being mounted — a container
+    that serves 200s while every real request 500s is precisely what a constant
+    `{"status": "ok"}` would hide.
+
+    Deliberately unauthenticated and deliberately shape-stable: a probe must not
+    need a session, and the body stays `{"status": "ok"}` so nothing downstream
+    parses a schema. An unreachable database is 503, which is what makes the
+    check mean anything.
+    """
+    try:
+        db.execute(select(1))
+    except SQLAlchemyError:
+        logger.exception("health check FAILED: database unreachable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="database_unavailable"
+        ) from None
     return {"status": "ok"}
+
+
+# The ASGI target uvicorn is pointed at (`app.main:app`).
+app = create_app()
