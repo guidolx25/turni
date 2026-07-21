@@ -191,8 +191,6 @@ export interface ObjectiveBreakdownOut {
   soft_unmet: number
   alternation_breaks: number
   fairness_deviation: number
-  spread_shared_pairs: number
-  jolly_days: number
   weighted_total: number
 }
 

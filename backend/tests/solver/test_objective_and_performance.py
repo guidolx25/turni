@@ -25,11 +25,14 @@ pytestmark = pytest.mark.phase2
 
 # A solve carrying a non-trivial mix so the breakdown fields exercise real,
 # non-zero terms: a soft request Matteo cannot fully avoid plus a pinned free day.
+# The pin is WEDNESDAY, inside his H3(b) bagnino domain {Tue, Wed} — an
+# out-of-domain pin (Thursday, as this fixture read before v1.12) is silently
+# ignored by the model, which would quietly drain the instance of its constraint.
 _INPUT = SolverInput(
     week_monday=WEEK_MONDAY,
     roster=roster(),
     constraints=(PersonalConstraint(MATTEO, Day.MON, ConstraintSlot.AM, ConstraintKind.SOFT),),
-    free_day_pins={MATTEO: Day.THU},
+    free_day_pins={MATTEO: Day.WED},
     prior_state=canonical_prior_state(),
     weights=WEIGHTS,
 )
@@ -45,25 +48,33 @@ def test_solve_seconds_is_populated_and_well_under_the_hard_fail() -> None:
 
 
 def test_objective_breakdown_is_present_on_a_feasible_solve() -> None:
-    """§11: a feasible solve carries the per-tier ObjectiveBreakdown for logging."""
+    """§11: a feasible solve carries the per-tier ObjectiveBreakdown for logging.
+    Three reported terms since v1.12 — `spread_shared_pairs` went hard (H3(c)) and
+    `jolly_days` is now fixed by H3, so neither is an objective value any more."""
     res = solve(_INPUT)
     assert res.objective is not None
     obj = res.objective
-    for field in (obj.soft_unmet, obj.alternation_breaks, obj.fairness_deviation, obj.jolly_days):
+    for field in (obj.soft_unmet, obj.alternation_breaks, obj.fairness_deviation):
         assert field >= 0
+
+
+def test_the_breakdown_reports_no_deleted_tier() -> None:
+    """§2.2 v1.12: a reported tier the objective no longer minimizes would be a
+    number nobody can act on. `spread_shared_pairs` and `jolly_days` are gone from
+    the dataclass, not merely zeroed."""
+    res = solve(_INPUT)
+    assert res.objective is not None
+    assert not hasattr(res.objective, "spread_shared_pairs")
+    assert not hasattr(res.objective, "jolly_days")
 
 
 def test_weighted_total_equals_the_lexicographic_sum() -> None:
     """§2.2/§8: weighted_total == w1·soft_unmet + w2·(alternation_breaks +
-    fairness_deviation) + w2_spread·spread_shared_pairs + w3·jolly_days, with the
-    input weights."""
+    fairness_deviation), with the input weights — the two-tier v1.12 objective."""
     res = solve(_INPUT)
     assert res.objective is not None
     obj = res.objective
-    expected = (
-        WEIGHTS.w1 * obj.soft_unmet
-        + WEIGHTS.w2 * (obj.alternation_breaks + obj.fairness_deviation)
-        + WEIGHTS.w2_spread * obj.spread_shared_pairs
-        + WEIGHTS.w3 * obj.jolly_days
+    expected = WEIGHTS.w1 * obj.soft_unmet + WEIGHTS.w2 * (
+        obj.alternation_breaks + obj.fairness_deviation
     )
     assert obj.weighted_total == expected

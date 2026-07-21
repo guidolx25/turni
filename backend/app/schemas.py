@@ -444,11 +444,15 @@ class OverrideIn(BaseModel):
 class ViolationOut(BaseModel):
     """One §2.1 hard rule the overridden week no longer satisfies.
 
-    Data, not prose (§9 renders it): `rule` is "H2", "H3" or "H4", `user_id` the
-    worker it lands on, and `day`/`slot` locate it where the rule is per-day or
-    per-slot. Present in the response because §5's override is deliberately
-    allowed to create these — see `app.override_service` — and the admin must
-    read back what they did.
+    Data, not prose (§9 renders it): `rule` is "H2", "H4", or one of H3's three
+    clauses under its own id — "H3" (a: not exactly one free day),
+    "H3_ROLE_DOMAIN" (b), "H3_SHARED_FREE_DAY" (c). The clauses are split because
+    §9 must render a different sentence for each; one id would force one sentence
+    and print a wrong reason for two of the three. `user_id` is the worker it
+    lands on, and `day`/`slot` locate it where the rule is per-day or per-slot.
+    Present in the response because §5's override is deliberately allowed to
+    create these — see `app.override_service` — and the admin must read back what
+    they did.
     """
 
     rule: str
@@ -636,8 +640,6 @@ class ObjectiveBreakdownOut(BaseModel):
     soft_unmet: int
     alternation_breaks: int
     fairness_deviation: int
-    spread_shared_pairs: int
-    jolly_days: int
     weighted_total: int
 
 
@@ -658,8 +660,6 @@ class SolveResultOut(BaseModel):
                 soft_unmet=result.objective.soft_unmet,
                 alternation_breaks=result.objective.alternation_breaks,
                 fairness_deviation=result.objective.fairness_deviation,
-                spread_shared_pairs=result.objective.spread_shared_pairs,
-                jolly_days=result.objective.jolly_days,
                 weighted_total=result.objective.weighted_total,
             )
         return cls(

@@ -10,16 +10,28 @@ Two distinct lifecycle endings are covered:
   target worker may act, an accept re-solves with the free day granted AND pinned
   and publishes, a decline escalates, and neither can happen twice.
 
-H3 note (§2.1, v1.4): a core worker's free day defaults to Mon–Thu, and the §2.3
-flow may issue that ONE worker a **sacrifice grant** widening their domain to
-`Mon–Thu ∪ {day}`. Per the §2.3 corollary, Friday is the only day where a grant
-changes anything — a Mon–Thu grant is a no-op, so that probe is the plain solve
-plus a pin and stays INFEASIBLE; Sat/Sun escalate at submission under H5. So a
-hard Friday request opens a proposal **iff** the Friday-extended probe is
-feasible, and escalates otherwise. Both branches are covered here:
+H3 note (§2.1, v1.12): a core worker's free day defaults to their ROLE domain —
+spiaggini {Mon, Tue}, bagnini {Tue, Wed} — and the §2.3 flow may issue that ONE
+worker a **sacrifice grant** widening their domain to `role-domain ∪ {day}`. The
+old "Friday is the only reachable day" corollary is VOID: §2.3's reachable-days
+table now gives each role three of them (a spiaggino Wed/Thu/Fri, a bagnino
+Mon/Thu/Fri). A grant for an in-domain day is still a no-op — that probe is the
+plain solve plus a pin and stays INFEASIBLE — and Sat/Sun still escalate at
+submission under H5. So a hard full-day request opens a proposal **iff** the
+extended probe is feasible, and escalates otherwise. Both branches are covered
+here (Friday, being out of domain for every role, remains a valid instance of the
+first case):
 
 * `test_h3_hard_friday_request_opens_a_friday_free_day_proposal` — probe feasible.
 * `test_h3_friday_conflict_with_infeasible_probe_escalates` — probe infeasible.
+
+Two conflicts escalate SYSTEMATICALLY under v1.12, and §2.3 names both. Neither
+may create a proposal row, at any grant strength:
+
+* `test_two_out_of_domain_requests_for_one_worker_escalate_without_a_proposal`
+  — H3(a) cardinality: one free day cannot cover two days off.
+* `test_a_same_role_pair_on_one_out_of_domain_day_escalates_without_a_proposal`
+  — H3(c) distinctness: the pair may not share the day, granted or not.
 
 The trade is the free-day PLACEMENT, never the hard request: an accepted proposal
 still honors H7 in full. That is asserted end-to-end on a real `/admin/solve` in
@@ -112,13 +124,13 @@ def _force_proposal(
     `test_h3_hard_friday_request_opens_a_friday_free_day_proposal` and end-to-end
     in `tests/test_full_week_simulation.py`.
 
-    Fixture guardrail only. Under v1.4 a proposal may offer any day a §2.3 grant
-    can reach — `Mon–Fri` (SOLVER_DAYS), Sat/Sun having no solver variables at all
-    (H5) — and in production Friday is the ONLY day the propose branch actually
-    reaches (§2.3 corollary). The Mon–Thu day seeded here is a deliberate synthetic
-    choice: it keeps these downstream tests' accept re-solve independent of the
-    grant mechanics they are not about. Which day is *reachable* is proven on a
-    real solve in `test_h3_hard_friday_request_opens_a_friday_free_day_proposal`.
+    Fixture guardrail only. A proposal may offer any day a §2.3 grant can reach —
+    `Mon–Fri` (SOLVER_DAYS), Sat/Sun having no solver variables at all (H5). The
+    default seeded here, Thursday for a spiaggino, is a genuinely reachable cell of
+    the v1.12 table, but it is seeded rather than provoked: that keeps these
+    downstream tests' accept re-solve independent of the grant mechanics they are
+    not about. WHICH days are reachable is proven on real solves, per role, in
+    `tests/solver/test_sacrifice_grant.py`.
     """
     assert day in SOLVER_DAYS, "no proposal can ever offer a weekend day (H5: no variables)"
     week = get_or_create_week(session, monday)
@@ -136,20 +148,22 @@ def _force_proposal(
 
 # --- §2.3: the two branches of a hard Friday request ------------------------
 #
-# Friday is the only day a sacrifice grant can change (§2.3 corollary), so it is
-# where both branches of step 2 are exercised: probe feasible → propose; probe
-# infeasible → escalate. Which branch fires is decided by the probe alone, never
-# by a literal day check, so both must stay covered.
+# Friday is out of domain for BOTH roles (§2.1 H3(b), v1.12), so it is a reachable
+# cell whichever worker asks — which makes it the cleanest place to exercise both
+# branches of step 2: probe feasible → propose; probe infeasible → escalate. Which
+# branch fires is decided by the probe alone, never by a literal day check, so both
+# must stay covered. (Friday is no longer the ONLY reachable day; the per-role
+# table is proven in `tests/solver/test_sacrifice_grant.py`.)
 
 
 def test_h3_hard_friday_request_opens_a_friday_free_day_proposal(
     client: TestClient, session: DbSession
 ) -> None:
-    """§2.1 H3 (v1.4) + §2.3 step 2: Pasha hard-off Friday makes the plain solve
-    INFEASIBLE — H4 forces Friday worked and his DEFAULT free-day domain stops at
-    Thursday. The flow then probes with a Friday sacrifice grant (`Mon–Thu ∪ {Fri}`)
-    plus the matching pin; that probe is feasible, so ONE proposal is opened to
-    Pasha offering Friday as his free day.
+    """§2.1 H3 (v1.12) + §2.3 step 2: Pasha hard-off Friday makes the plain solve
+    INFEASIBLE — H4 forces Friday worked and his spiaggino role domain is
+    {Mon, Tue}. The flow then probes with a Friday sacrifice grant
+    (`{Mon, Tue} ∪ {Fri}`) plus the matching pin; that probe is feasible, so ONE
+    proposal is opened to Pasha offering Friday as his free day.
 
     Nothing is resolved silently (§2.3 step 4): the week stays `solved` and
     unpublished until Pasha answers, and the admin is NOT escalated to yet — the
@@ -314,6 +328,113 @@ def test_unresolvable_conflict_escalates_without_a_proposal(
     assert core and any(item["day"] == "mon" for item in core)
 
 
+# --- §2.3's two SYSTEMATIC escalations (v1.12) ------------------------------
+
+
+def _assert_escalated_without_a_proposal(
+    session: DbSession, roster: dict, days: set[str]
+) -> None:
+    """The shared assertion of both cases below: no proposal row exists at all,
+    the workers are told nothing, and the visible admin holds the conflict.
+
+    `days` is a SET because a minimal core names one sufficient conflict, not every
+    conflicting request: when a worker asks for two out-of-domain days, either one
+    alone already makes the week infeasible, so either is a legitimate core."""
+    assert session.scalars(select(SacrificeProposal)).all() == [], (
+        "§2.3: these conflicts have no resolvable free-day move, so nothing may be offered"
+    )
+    worker_notes = session.scalars(
+        select(Notification).where(
+            Notification.event_type.in_((EVENT_SACRIFICE_PROPOSED, EVENT_SACRIFICE_RESOLVED))
+        )
+    ).all()
+    assert worker_notes == []
+    escalations = session.scalars(
+        select(Notification).where(Notification.event_type == EVENT_SACRIFICE_ESCALATED)
+    ).all()
+    assert [n.user_id for n in escalations] == [roster["mattia"].id]
+    core = escalations[0].payload.get("conflict")
+    assert core and any(item["day"] in days for item in core), core
+
+
+def test_two_out_of_domain_requests_for_one_worker_escalate_without_a_proposal(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.3 systematic escalation (i), v1.12: "One worker, two out-of-domain
+    full-day requests. H7 demands zero slots on both days; H3(a) allows exactly one
+    free day; a grant widens *where* the free day falls, never how many there are.
+    No single grant satisfies both."
+
+    Pasha is a spiaggino (domain {Mon, Tue}) and asks for BOTH Thursday and Friday
+    off, hard. Each day is individually `reachable` — either one alone would open a
+    proposal — so the escalation here is caused by the cardinality clause and by
+    nothing else. This is also the reasoning §6's `UNIQUE(week_id, user_id)` guard
+    now rests on, which is why no proposal row may be created."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    _hard(session, roster["pasha"].id, week, Day.THU)
+    _hard(session, roster["pasha"].id, week, Day.FRI)
+
+    login(client, "mattia")
+    resp = _solve(client, monday)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "infeasible"
+
+    _assert_escalated_without_a_proposal(session, roster, days={"thu", "fri"})
+    session.refresh(week)
+    assert week.status is WeekStatus.SOLVED  # parked for the admin, never published
+
+
+def test_a_same_role_pair_on_one_out_of_domain_day_escalates_without_a_proposal(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.3 systematic escalation (ii), v1.12: "Both same-role workers, the same
+    out-of-domain day. H3(c) forbids them sharing a free day at any strength,
+    granted or not."
+
+    Both spiaggini ask for Thursday off, hard. Thursday is `reachable` for a
+    spiaggino, so a grant to EITHER of them widens a real domain — and still fails,
+    because the other's hard request forces them onto the same free day. No probe
+    can succeed, so no proposal row may be created for either worker."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    _hard(session, roster["pasha"].id, week, Day.THU)
+    _hard(session, roster["amir"].id, week, Day.THU)
+
+    login(client, "mattia")
+    resp = _solve(client, monday)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "infeasible"
+
+    _assert_escalated_without_a_proposal(session, roster, days={"thu"})
+    session.refresh(week)
+    assert week.status is WeekStatus.SOLVED
+
+
+def test_either_of_those_requests_alone_does_open_a_proposal(
+    client: TestClient, session: DbSession
+) -> None:
+    """The intended-reason guard for both tests above: Pasha's Thursday request ON
+    ITS OWN reaches step 2 and opens a proposal. So what closes the branch in the
+    two escalations is the ADDED constraint — H3(a) cardinality in one case, H3(c)
+    distinctness in the other — and not something incidental about Thursday."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+    week = get_or_create_week(session, monday)
+    _hard(session, roster["pasha"].id, week, Day.THU)
+
+    login(client, "mattia")
+    assert _solve(client, monday).json()["status"] == "infeasible"
+
+    proposals = session.scalars(select(SacrificeProposal)).all()
+    assert len(proposals) == 1
+    assert proposals[0].user_id == roster["pasha"].id
+    assert proposals[0].proposed_free_day is Day.THU
+    assert proposals[0].status is SacrificeStatus.PENDING
+
+
 # --- escalation carries the minimal unsat core (§2.3, §10, both paths) -------
 
 
@@ -403,7 +524,7 @@ def test_proposal_notifies_only_the_target_worker(client: TestClient, session: D
 
     Downstream coverage of `_create_proposal`'s fan-out: the offered day is the one
     the fixture seeded (Thursday here), NOT a claim about which day the propose
-    branch can reach — under v1.4 that is Friday, proven on a real INFEASIBLE solve
+    branch can reach — a day outside the holder's role domain, proven on a real INFEASIBLE solve
     in `test_h3_hard_friday_request_opens_a_friday_free_day_proposal`."""
     roster = create_full_roster(session)
     monday = _future_monday()

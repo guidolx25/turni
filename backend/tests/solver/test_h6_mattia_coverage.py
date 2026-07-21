@@ -42,18 +42,22 @@ from tests.solver.fixtures import (
 # Phase of origin (project conventions: gate runs selectable per phase).
 pytestmark = pytest.mark.phase2
 
-# Free-day pins that spread the four core gaps across four distinct role-days,
-# so the expected jolly occupancy is unambiguous (no doubling):
-#   Mon: Matteo (bagnino) free   → Mattia bagnino Mon
-#   Tue: Francesco (bagnino) free → Mattia bagnino Tue
-#   Wed: Pasha (spiaggino) free   → Mattia spiaggino Wed
-#   Thu: Amir (spiaggino) free    → Mattia spiaggino Thu
-SPREAD_PINS = {MATTEO: Day.MON, FRANCESCO: Day.TUE, PASHA: Day.WED, AMIR: Day.THU}
+# Free-day pins spreading the four core gaps across four distinct ROLE-days, so
+# the expected jolly occupancy is unambiguous. Every pin sits inside its worker's
+# H3(b) role domain (§2.1, v1.12) — bagnini {Tue, Wed}, spiaggini {Mon, Tue} — and
+# no same-role pair shares a day (H3(c)); an out-of-domain pin would simply be
+# ignored (§8) and the expectation below would be about a different week:
+#   Mon: Pasha (spiaggino) free     → Mattia spiaggino Mon
+#   Tue: Amir (spiaggino) free      → Mattia spiaggino Tue
+#   Tue: Matteo (bagnino) free      → Mattia bagnino Tue
+#   Wed: Francesco (bagnino) free   → Mattia bagnino Wed
+# Tuesday is the one day he doubles, and in two DIFFERENT roles (H2 permits it).
+SPREAD_PINS = {PASHA: Day.MON, AMIR: Day.TUE, MATTEO: Day.TUE, FRANCESCO: Day.WED}
 EXPECTED_JOLLY_ROLE_DAYS = {
-    (Day.MON, AssignmentRole.BAGNINO),
+    (Day.MON, AssignmentRole.SPIAGGINO),
+    (Day.TUE, AssignmentRole.SPIAGGINO),
     (Day.TUE, AssignmentRole.BAGNINO),
-    (Day.WED, AssignmentRole.SPIAGGINO),
-    (Day.THU, AssignmentRole.SPIAGGINO),
+    (Day.WED, AssignmentRole.BAGNINO),
 }
 
 

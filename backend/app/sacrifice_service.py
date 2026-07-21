@@ -5,7 +5,7 @@ assumption literals, §8). This module turns that into the §2.3 conversation:
 
 1. **Probe before proposing.** For each core worker named in the conflict, re-solve
    once carrying a **sacrifice grant** for the conflicted day (extending that one
-   worker's H3 free-day domain to `Mon–Thu ∪ {day}`) together with a pin forcing
+   worker's H3 free-day domain to `role-domain ∪ {day}`) together with a pin forcing
    their free day onto it. If that is feasible, we *know* accepting will work — so
    we propose it. No dead-end proposals where a worker consents and the re-solve
    fails anyway (which would corrode trust in the offer).
@@ -98,16 +98,25 @@ def open_sacrifice(db: DbSession, week: Week, result: SolverResult) -> Sacrifice
     # H3 + §2.3 sacrifice grant: a conflicted day is a candidate iff a grant could
     # make it a legal free day — the GENERAL rule, `day ∈ SOLVER_DAYS` (Mon–Fri),
     # since that is exactly what `free_day_domain` will extend to. The §2.3
-    # corollary then falls out rather than being special-cased:
-    #   - Mon–Thu are already in the default domain, so the grant is a no-op and the
-    #     probe reduces to the plain solve plus a pin. A pin only ADDS free[u][d]=1,
-    #     so the probe's feasible region is a subset: an INFEASIBLE week stays
-    #     INFEASIBLE. Holds for slot-level and full-day requests alike;
-    #   - Friday is the one day H4 forces worked that the grant can free — the only
-    #     day where extending the domain changes the outcome;
+    # reachable-days table then falls out rather than being special-cased:
+    #   - a day already inside the holder's H3(b) ROLE domain makes the grant a
+    #     no-op, so the probe reduces to the plain solve plus a pin. A pin only
+    #     ADDS free[u][d]=1, so the probe's feasible region is a subset: an
+    #     INFEASIBLE week stays INFEASIBLE, and the candidate falls through to the
+    #     escalation below. Holds for slot-level and full-day requests alike;
+    #   - the days OUTSIDE that role domain are the ones a grant can actually free,
+    #     and v1.12 makes them per-role: Wed/Thu/Fri for a spiaggino (domain
+    #     Mon/Tue), Mon/Thu/Fri for a bagnino (domain Tue/Wed). Six reachable cells,
+    #     not the single Friday of the superseded corollary;
     #   - Sat/Sun have no solver variables at all (H5 template), so they are not in
     #     SOLVER_DAYS, yield no candidate, and fall through to the escalation below.
-    # No literal Friday check appears anywhere in this filter.
+    # The filter is purely structural: it names no day, so which cells are reachable
+    # is decided entirely by `free_day_domain` and the probe, and this code needed no
+    # change when v1.12 replaced the uniform Mon–Thu domain with per-role domains.
+    # It is also why the two systematically-infeasible cases in §2.3 (one worker with
+    # two out-of-domain requests; both same-role workers on the same out-of-domain
+    # day, which H3(c) forbids) need no special case here — their probes simply come
+    # back INFEASIBLE and the loop escalates.
     candidates = sorted(
         {
             (c.worker_id, c.day)

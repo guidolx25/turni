@@ -17,6 +17,7 @@ from app.enums import (
     AssignmentSlot,
     ConstraintKind,
     ConstraintSlot,
+    UserRole,
 )
 from app.solver.types import (
     SOLVER_DAYS,
@@ -53,8 +54,8 @@ def _single_role(worker: WorkerRef) -> AssignmentRole:
 def solve(inp: SolverInput) -> SolverResult:
     """Solve one week's Mon–Fri schedule (§8). Pure: no DB, no I/O.
 
-    Builds the CP-SAT model (H1–H7 hard, S1–S3 soft), minimizes the
-    well-separated W1/W2/W3 objective (§2.2), and returns assignments with a
+    Builds the CP-SAT model (H1–H7 hard, S1–S2 soft), minimizes the
+    well-separated W1/W2 objective (§2.2), and returns assignments with a
     per-tier breakdown — or, on INFEASIBLE, the blocking hard constraints named
     via assumption literals for the §2.3 sacrifice flow.
     """
@@ -72,17 +73,19 @@ def solve(inp: SolverInput) -> SolverResult:
                     x[(w.id, d, s, r)] = model.NewBoolVar(f"x_{w.id}_{d}_{s}_{r}")
 
     # free[(uid, day)] — core workers only, over each worker's H3 domain D(u) (§8).
-    # H3 + §2.3 sacrifice grant: D(u) is Mon–Thu, widened to Mon–Thu ∪ {g} for a
-    # worker carrying a grant for day g. `free_day_domain` returns FREE_DAYS itself
-    # when no grant applies, so a normal solve's domains are exactly Mon–Thu by
-    # construction. Held per worker because a grant is per worker: the domains are
-    # NOT uniform across the roster, and every downstream loop must use D(u) rather
-    # than FREE_DAYS or the `free` keys and the iteration will silently disagree.
+    # H3(b) + §2.3 sacrifice grant: D(u) is the worker's ROLE domain ({Mon, Tue} for
+    # a spiaggino, {Tue, Wed} for a bagnino), widened to `role-domain ∪ {g}` for a
+    # worker carrying a grant for day g. `free_day_domain` returns the role tuple
+    # itself when no grant applies, so a normal solve's domains are exactly the role
+    # domains by construction. Held per worker because the domains are NOT uniform
+    # across the roster — they differ by role even before any grant — so every
+    # downstream loop must use D(u); a loop over some fixed day tuple would silently
+    # disagree with the variables that actually exist.
     domain: dict[int, tuple[object, ...]] = {}
     free: dict[tuple[int, object], cp_model.IntVar] = {}
     for w in roster:
         if w.is_core:
-            domain[w.id] = free_day_domain(w.id, inp.sacrifice_grants)
+            domain[w.id] = free_day_domain(w.role, w.id, inp.sacrifice_grants)
             for d in domain[w.id]:
                 free[(w.id, d)] = model.NewBoolVar(f"free_{w.id}_{d}")
 
@@ -106,17 +109,19 @@ def solve(inp: SolverInput) -> SolverResult:
                 for s in _SLOTS:
                     model.Add(sum(x[(w.id, d, s, r)] for r in w.compatible_roles) <= 1)
 
-    # --- H3: exactly one free day within D(u); zero slots on it ---------------
+    # --- H3(a)/(b): exactly one free day within D(u); zero slots on it --------
     for w in roster:
         if not w.is_core:
             continue
-        # H3 cardinality — UNCHANGED by a §2.3 grant: still exactly one free day.
+        # H3(a) cardinality — UNCHANGED by a §2.3 grant: still exactly one free day.
         # The grant widens the set this sum ranges over, never the count (§2.1 H3).
+        # H3(b) is encoded structurally: the sum ranges over D(u), so no free var
+        # exists outside the role domain and the free day cannot land there.
         model.Add(sum(free[(w.id, d)] for d in domain[w.id]) == 1)
-        # Pinned free day (golden test / §2.3 re-solve): it FORCES the free day
-        # onto that day, within D(u). A pin outside D(u) has no variable to force
-        # and is ignored — the §2.3 accept path always passes the matching grant
-        # alongside the pin (that is what makes a Friday pin legal), so this is a
+        # Pinned free day (§2.3 re-solve): it FORCES the free day onto that day,
+        # within D(u). A pin outside D(u) has no variable to force and is ignored —
+        # the §2.3 accept path always passes the matching grant alongside the pin
+        # (that is what makes an out-of-domain pin legal), so this is a
         # belt-and-braces guard against a pin arriving without its grant.
         pin = inp.free_day_pins.get(w.id)
         if pin is not None and pin in domain[w.id]:
@@ -126,6 +131,32 @@ def solve(inp: SolverInput) -> SolverResult:
                 for r in w.compatible_roles:
                     # On the free day the worker works zero slots.
                     model.Add(x[(w.id, d, s, r)] <= 1 - free[(w.id, d)])
+
+    # --- H3(c): two workers sharing a role never share a free day -------------
+    # Explicitly encoded because it is NOT implied by H1/H6 coverage: a layout
+    # resting both bagnini on Wednesday (or both spiaggini on Monday) covers fine
+    # with the jolly doubling, so nothing else in the model rules it out. §2.1 H3(c)
+    # excludes it deliberately, so that a role is never left to the jolly alone for
+    # a whole day. This is the same behaviour the pre-v1.12 W2_SPREAD objective term
+    # expressed — promoted from a soft preference over the full-weekend spiaggini to
+    # a hard constraint over BOTH role pairs, so it hardened rather than lapsed.
+    #
+    # Pairing keys off `role`, never identity, and the day loop is D(u) ∩ D(v): a day
+    # only one of them holds cannot be shared, so the intersection is this clause's
+    # exact, total support. It stays correct under a §2.3 grant — a granted worker
+    # still may not share with their same-role partner (§2.1 H3), and if the grant
+    # widens D(u) into a day D(v) also holds, the intersection picks it up.
+    core_by_role: dict[UserRole, list[int]] = {}
+    for w in roster:
+        if w.is_core:
+            core_by_role.setdefault(w.role, []).append(w.id)
+    for same_role_ids in core_by_role.values():
+        ids = sorted(same_role_ids)
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                u, v = ids[i], ids[j]
+                for d in (d for d in domain[u] if d in domain[v]):
+                    model.Add(free[(u, d)] + free[(v, d)] <= 1)
 
     # --- H4: exactly one slot per working weekday for core workers ------------
     for w in roster:
@@ -139,8 +170,10 @@ def solve(inp: SolverInput) -> SolverResult:
                 model.Add(worked == 1 - free[(w.id, d)])
             else:
                 # Outside D(u) there is no free var, so H4 forces the day worked.
-                # This is what makes Friday unfreeable on a normal solve — and what
-                # a §2.3 grant lifts for the granted worker alone (§2.3 corollary).
+                # This is what makes every day outside the role domain unrestable on
+                # a normal solve — Thu and Fri for everyone, plus Wed for a spiaggino
+                # and Mon for a bagnino — and what a §2.3 grant lifts for the granted
+                # worker alone, on the one granted day (§2.3 reachable-days table).
                 model.Add(worked == 1)
 
     # H5 is NOT modelled (weekend template, emitted elsewhere).
@@ -168,9 +201,10 @@ def solve(inp: SolverInput) -> SolverResult:
         lit_to_constraint[lit.index] = c
         lit_by_index[lit.index] = lit
 
-    # --- Objective S1–S3 (§2.2), well-separated weights (weights.py) ----------
-    w1, w2, w3 = inp.weights.w1, inp.weights.w2, inp.weights.w3
-    w2_spread = inp.weights.w2_spread
+    # --- Objective S1–S2 (§2.2), well-separated weights (weights.py) ----------
+    # Two tiers since v1.12. H3 now fixes free-day placement down to the 2×2
+    # within-pair choice, and this objective is what resolves that choice (§8).
+    w1, w2 = inp.weights.w1, inp.weights.w2
 
     # S1: one penalty per unmet SOFT request (worker works the constrained slot).
     soft_terms: list[cp_model.IntVar] = []
@@ -218,65 +252,13 @@ def solve(inp: SolverInput) -> SolverResult:
         fairness_terms.append(dev)
     fairness_deviation = sum(fairness_terms)
 
-    # S2c: rest spread — full-weekend worker pairs sharing a free day (§2.2).
-    # F = core workers who work THIS week's full-day weekend template (the two
-    # full-day spiaggini), taken from `inp.full_weekend_ids` — derived structurally
-    # from the emitted H5 template, never from identity. That structural signal is
-    # what makes this term fire on a first-ever week (empty `prior_state`). We also
-    # accept a FULL_DAY prior boundary as membership: only full-day spiaggini exit
-    # Sunday full-day, so the two signals name the SAME set in steady state; the
-    # union simply keeps the term correct when only one signal is supplied. Each
-    # pair {u,v} that rests on the SAME day leaves their spiaggino role covered by
-    # the jolly alone for a whole day, so penalize it into the S2 band.
-    full_weekend_ids = sorted(
-        w.id
-        for w in roster
-        if w.is_core
-        and (w.id in inp.full_weekend_ids or inp.prior_state.get(w.id) is PriorSlot.FULL_DAY)
-    )
-    spread_terms: list[cp_model.IntVar] = []
-    for i in range(len(full_weekend_ids)):
-        for j in range(i + 1, len(full_weekend_ids)):
-            u, v = full_weekend_ids[i], full_weekend_ids[j]
-            # H3 + §2.3: iterate the days BOTH can actually rest on — D(u) ∩ D(v) —
-            # not FREE_DAYS. Under a grant the `free` keys are a strict superset of
-            # FREE_DAYS, so a FREE_DAYS loop would be partial over the real domain.
-            # A day only one of them holds cannot be *shared*, so the intersection
-            # is the exact, total support of this term.
-            #
-            # A granted (Friday) day DOES count when both hold it, deliberately: the
-            # term penalizes two full-weekend workers resting together because it
-            # leaves their spiaggino role covered by the jolly alone for a whole day
-            # (§2.2) — a rationale about coverage, which is day-agnostic. Excluding
-            # the granted day would hand the solver a penalty-free way to co-locate
-            # exactly the pair this term exists to spread. (In the implemented §2.3
-            # flow only one worker is ever granted at a time, so the intersection is
-            # FREE_DAYS in practice; the general rule is what is encoded.)
-            for d in (d for d in domain[u] if d in domain[v]):
-                both = model.NewBoolVar(f"spread_{u}_{v}_{d}")
-                # both = AND(free[u][d], free[v][d]); min pulls it to max(0,sum-1).
-                # H3 gives each exactly one free day, so at most one d fires per pair.
-                model.Add(both >= free[(u, d)] + free[(v, d)] - 1)
-                spread_terms.append(both)
-    spread_count = sum(spread_terms)
-
-    # S3: jolly worked-day count (minimize -> induces free-day pairing).
-    jolly_terms: list[cp_model.IntVar] = []
-    jolly = next((w for w in roster if w.is_jolly), None)
-    if jolly is not None:
-        for d in SOLVER_DAYS:
-            jw = model.NewBoolVar(f"jolly_works_{d}")
-            for s in _SLOTS:
-                model.Add(jw >= works_slot(jolly.id, d, s))
-            jolly_terms.append(jw)
-    jolly_days = sum(jolly_terms)
-
-    model.Minimize(
-        w1 * soft_unmet
-        + w2 * (alternation_breaks + fairness_deviation)
-        + w2_spread * spread_count
-        + w3 * jolly_days
-    )
+    # There is no third tier and no rest-spread term (v1.12). Rest spread is now
+    # H3(c) above — hard, and over both role pairs — and the jolly's worked-day
+    # count is no longer a degree of freedom: all four legal H3 layouts produce the
+    # same jolly load (Mon 1 / Tue 2 / Wed 1 / Thu 0 / Fri 0), so a tier minimizing
+    # it would be a no-op. Neither preference was dropped; both stopped being
+    # *choices* the objective could influence.
+    model.Minimize(w1 * soft_unmet + w2 * (alternation_breaks + fairness_deviation))
 
     # --- Solve -------------------------------------------------------------
     solver = cp_model.CpSolver()
@@ -337,16 +319,15 @@ def solve(inp: SolverInput) -> SolverResult:
     assignments = _extract_assignments(solver, x, roster)
     breakdown = _breakdown(assignments, inp)
 
+    # §8/§11: every solve logs duration and the per-tier objective values.
     logger.info(
         "solver %s in %.3fs: soft_unmet=%d alternation_breaks=%d "
-        "fairness_deviation=%d spread_shared_pairs=%d jolly_days=%d weighted_total=%d",
+        "fairness_deviation=%d weighted_total=%d",
         solver.StatusName(cp_status),
         elapsed,
         breakdown.soft_unmet,
         breakdown.alternation_breaks,
         breakdown.fairness_deviation,
-        breakdown.spread_shared_pairs,
-        breakdown.jolly_days,
         breakdown.weighted_total,
     )
 
@@ -477,57 +458,13 @@ def _breakdown(assignments: tuple[SlotAssignment, ...], inp: SolverInput) -> Obj
         pm = sum(works(w.id, d, AssignmentSlot.PM) for d in SOLVER_DAYS)
         fairness_deviation += abs(am - pm)
 
-    # S2c: rest spread — full-weekend worker pairs whose single H3 free day (the
-    # Mon–Thu day they worked zero slots) coincides. Membership mirrors the model
-    # term: this-week structural template membership (`inp.full_weekend_ids`) unioned
-    # with a FULL_DAY prior boundary, so the reported breakdown matches what CP-SAT
-    # minimized on week 1 too, not only after prior_state is seeded.
-    full_weekend_ids = sorted(
-        w.id
-        for w in inp.roster
-        if w.is_core
-        and (w.id in inp.full_weekend_ids or inp.prior_state.get(w.id) is PriorSlot.FULL_DAY)
-    )
-
-    def free_day(uid: int) -> object | None:
-        # H3 + §2.3: scan the worker's ACTUAL domain D(u), including any granted
-        # day — NOT FREE_DAYS. Scanning Mon–Thu under a Friday grant finds all four
-        # worked, returns None, and silently zeroes this pair's spread contribution,
-        # so the LOGGED breakdown would diverge from what CP-SAT actually minimized.
-        # §8 requires the reported breakdown to be the minimized value, so the
-        # divergence would be a real defect, not a cosmetic one.
-        domain = free_day_domain(uid, inp.sacrifice_grants)
-        rest = [d for d in domain if not any(works(uid, d, s) for s in _SLOTS)]
-        return rest[0] if len(rest) == 1 else None
-
-    free_by_id = {uid: free_day(uid) for uid in full_weekend_ids}
-    spread_shared_pairs = 0
-    for i in range(len(full_weekend_ids)):
-        for j in range(i + 1, len(full_weekend_ids)):
-            fu = free_by_id[full_weekend_ids[i]]
-            fv = free_by_id[full_weekend_ids[j]]
-            if fu is not None and fu == fv:
-                spread_shared_pairs += 1
-
-    # S3: jolly worked-day count.
-    jolly_days = 0
-    jolly = next((w for w in inp.roster if w.is_jolly), None)
-    if jolly is not None:
-        jolly_days = sum(1 for d in SOLVER_DAYS if any(works(jolly.id, d, s) for s in _SLOTS))
-
-    w1, w2, w3 = inp.weights.w1, inp.weights.w2, inp.weights.w3
-    w2_spread = inp.weights.w2_spread
-    weighted_total = (
-        w1 * soft_unmet
-        + w2 * (alternation_breaks + fairness_deviation)
-        + w2_spread * spread_shared_pairs
-        + w3 * jolly_days
-    )
+    # No further tiers (v1.12): rest spread is H3(c), a hard constraint with no
+    # objective value to report, and the jolly worked-day count is fixed by H3.
+    w1, w2 = inp.weights.w1, inp.weights.w2
+    weighted_total = w1 * soft_unmet + w2 * (alternation_breaks + fairness_deviation)
     return ObjectiveBreakdown(
         soft_unmet=soft_unmet,
         alternation_breaks=alternation_breaks,
         fairness_deviation=fairness_deviation,
-        spread_shared_pairs=spread_shared_pairs,
-        jolly_days=jolly_days,
         weighted_total=weighted_total,
     )

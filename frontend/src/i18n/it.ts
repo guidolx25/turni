@@ -231,8 +231,6 @@ export const it = {
   'admin.solve.objective.softUnmet': 'Preferenze non soddisfatte',
   'admin.solve.objective.alternation': 'Interruzioni di alternanza',
   'admin.solve.objective.fairness': 'Squilibrio mattina/pomeriggio',
-  'admin.solve.objective.spread': 'Coppie del weekend con lo stesso giorno libero',
-  'admin.solve.objective.jollyDays': 'Giornate lavorate dal jolly',
   'admin.solve.objective.total': 'Totale pesato',
   'admin.solve.blocking': 'Richieste vincolanti in conflitto',
   'admin.solve.blocking.help':
@@ -271,6 +269,10 @@ export const it = {
     'La modifica è stata applicata comunque: la decisione è tua. Queste situazioni restano da sistemare a mano.',
   'admin.override.violation.h2': '{name}: due ruoli nella stessa fascia ({day}, {slot}).',
   'admin.override.violation.h3': '{name}: nessun giorno libero in settimana.',
+  'admin.override.violation.h3_role_domain':
+    '{name}: giorno di riposo fuori dai giorni previsti per il suo ruolo.',
+  'admin.override.violation.h3_shared_free_day':
+    '{name}: a riposo lo stesso giorno di un altro lavoratore con lo stesso ruolo.',
   'admin.override.violation.h4': '{name}: più di una fascia nello stesso giorno ({day}).',
   'admin.override.violation.other': '{name}: vincolo {rule} non rispettato.',
   'admin.override.someone': 'Un lavoratore',
@@ -385,6 +387,10 @@ export const it = {
   'errors.swap_role_invalid': 'I ruoli dei due turni non sono compatibili.',
   'errors.swap_h2_violation': 'Lo scambio darebbe due ruoli nella stessa fascia a una persona.',
   'errors.swap_h3_violation': 'Lo scambio farebbe lavorare qualcuno nel suo giorno libero.',
+  'errors.swap_h3_role_domain':
+    'Lo scambio sposterebbe il giorno di riposo di qualcuno fuori dai giorni previsti per il suo ruolo.',
+  'errors.swap_h3_shared_free_day':
+    'Lo scambio lascerebbe due lavoratori con lo stesso ruolo a riposo lo stesso giorno.',
   'errors.swap_h4_violation': 'Lo scambio darebbe due fasce nello stesso giorno a una persona.',
   'errors.swap_weekend_bagnini_only': 'Nel weekend si scambiano solo i turni dei bagnini.',
   'errors.swap_already_resolved': 'Richiesta di scambio già decisa.',

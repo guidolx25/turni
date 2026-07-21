@@ -41,7 +41,6 @@ def _input() -> SolverInput:
         free_day_pins={},
         sacrifice_grants={},
         prior_state=canonical_prior_state(),
-        full_weekend_ids=frozenset(),
         weights=WEIGHTS,
     )
 

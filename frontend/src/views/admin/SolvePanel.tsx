@@ -49,8 +49,6 @@ function ObjectiveRows({ result }: { result: SolveResultOut }) {
     { labelKey: 'admin.solve.objective.softUnmet', value: objective.soft_unmet },
     { labelKey: 'admin.solve.objective.alternation', value: objective.alternation_breaks },
     { labelKey: 'admin.solve.objective.fairness', value: objective.fairness_deviation },
-    { labelKey: 'admin.solve.objective.spread', value: objective.spread_shared_pairs },
-    { labelKey: 'admin.solve.objective.jollyDays', value: objective.jolly_days },
     { labelKey: 'admin.solve.objective.total', value: objective.weighted_total },
   ]
   return (

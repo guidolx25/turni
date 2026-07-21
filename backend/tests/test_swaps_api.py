@@ -47,7 +47,7 @@ from app.notifications import EVENT_SWAP_ACCEPTED, EVENT_SWAP_REJECTED, EVENT_SW
 from app.publish_service import publish_week
 from app.scheduling import get_or_create_week
 from app.solve_service import run_solve
-from app.solver import FREE_DAYS, SOLVER_DAYS
+from app.solver import SOLVER_DAYS, free_day_domain
 from app.swap_service import SWAP_TTL
 from tests.factories import PASSWORD, create_full_roster
 
@@ -124,19 +124,72 @@ def _role_compatible(user_role: UserRole, row_role: AssignmentRole) -> bool:
     return user_role is UserRole.JOLLY or user_role.value == row_role.value
 
 
+def _holders_after(rows: list[Assignment], from_a: Assignment, to_a: Assignment) -> dict[int, int]:
+    """The whole week's row→holder map with the two rows exchanged. H3(c) is
+    PAIRWISE, so no party's legality can be decided from their own rows alone."""
+    holders = {a.id: a.user_id for a in rows}
+    holders[from_a.id] = to_a.user_id
+    holders[to_a.id] = from_a.user_id
+    return holders
+
+
+def _free_weekdays_after(
+    session: DbSession, rows: list[Assignment], holders: dict[int, int]
+) -> dict[int, set[Day]]:
+    """Every CORE worker in the week → the weekdays they would hold no slot on."""
+    worked: dict[int, set[Day]] = {}
+    for a in rows:
+        uid = holders[a.id]
+        worked.setdefault(uid, set())
+        if a.day in SOLVER_DAYS:
+            worked[uid].add(a.day)
+    out: dict[int, set[Day]] = {}
+    for uid, days in worked.items():
+        user = session.get(User, uid)
+        if user is not None and user.role is not UserRole.JOLLY:
+            out[uid] = set(SOLVER_DAYS) - days
+    return out
+
+
 def _legal_after(
-    rows: list[Assignment], user_id: int, give: Assignment, take: Assignment, *, core: bool
+    session: DbSession,
+    rows: list[Assignment],
+    holders: dict[int, int],
+    user_id: int,
 ) -> bool:
-    """Would this party still satisfy H2 (+ H3/H4 if core) after the exchange?"""
-    held = _held_after(rows, user_id, give, take)
+    """Would this party still satisfy H2 — and, if core, H4 and all three H3
+    clauses — after the exchange?
+
+    v1.12: H3 is (a) exactly one free weekday, (b) inside the worker's ROLE domain
+    (spiaggini {Mon, Tue}, bagnini {Tue, Wed}, widened by an accepted §2.3 grant),
+    and (c) no same-role worker resting the same day. The pre-v1.12 form of this
+    helper ended `in FREE_DAYS` — a uniform Mon–Thu window with no notion of role
+    and no notion of (c) — so it happily generated "legal" candidates the validator
+    now correctly refuses. It is a SCENARIO CHOOSER, never an oracle: the server's
+    answer is always what the tests assert."""
+    user = session.get(User, user_id)
+    assert user is not None
+    held = {(a.day, a.slot, a.role) for a in rows if holders[a.id] == user_id}
     if not _h2_ok(held):
         return False
-    if not core:
+    if user.role is UserRole.JOLLY:
         return True  # H6: the jolly may double and holds no H3 free day
     if not _h4_ok(held):
         return False
-    free = _free_after(held)
-    return len(free) == 1 and next(iter(free)) in FREE_DAYS  # H3
+    free_map = _free_weekdays_after(session, rows, holders)
+    free = free_map[user_id]
+    if len(free) != 1:  # H3(a)
+        return False
+    day = next(iter(free))
+    if day not in free_day_domain(user.role, user_id, {}):  # H3(b)
+        return False
+    for other, days in free_map.items():  # H3(c)
+        if other == user_id:
+            continue
+        partner = session.get(User, other)
+        if partner is not None and partner.role is user.role and day in days:
+            return False
+    return True
 
 
 def _legal_exchanges(
@@ -159,13 +212,10 @@ def _legal_exchanges(
                 continue
             if not _role_compatible(target.role, mine.role):
                 continue
-            if not _legal_after(
-                rows, requester.id, mine, theirs, core=requester.role is not UserRole.JOLLY
-            ):
+            holders = _holders_after(rows, mine, theirs)
+            if not _legal_after(session, rows, holders, requester.id):
                 continue
-            if not _legal_after(
-                rows, target.id, theirs, mine, core=target.role is not UserRole.JOLLY
-            ):
+            if not _legal_after(session, rows, holders, target.id):
                 continue
             found.append((mine, theirs))
     return found
@@ -182,19 +232,27 @@ def _free_weekday(rows: list[Assignment], user_id: int) -> Day:
     return next(iter(free))
 
 
-def _find_friday_free_day_exchange(
-    session: DbSession, rows: list[Assignment]
+def _find_out_of_domain_free_day_exchange(
+    session: DbSession,
+    rows: list[Assignment],
+    landing_day: Day,
+    requester_role: UserRole | None = None,
 ) -> tuple[Assignment, Assignment] | None:
-    """An exchange that would leave the REQUESTER resting on Friday — legal only
-    under a §2.3 grant (§2.1 H3). Everything else about it is valid, and the
-    other party stays legal, so the only rule it can break is the requester's
-    H3 domain. That makes it the exact pair for the without-grant refusal and
-    the with-grant acceptance, which must differ ONLY in the grant."""
+    """An exchange that would leave the REQUESTER resting on `landing_day`, a day
+    outside their H3(b) role domain (§2.1 H3, v1.12) — legal only under a §2.3
+    grant. Everything else about it is valid: H2/H4/H3(a) hold for the requester,
+    no same-role partner collides, and the other party stays legal. So the only
+    rule the swap can break is the requester's ROLE DOMAIN, which makes this the
+    exact pair for the without-grant refusal and the with-grant acceptance —
+    they must differ ONLY in the grant."""
     for mine in rows:
         requester = session.get(User, mine.user_id)
         assert requester is not None
         if requester.role is UserRole.JOLLY or mine.day in _WEEKEND:
             continue
+        if requester_role is not None and requester.role is not requester_role:
+            continue
+        assert landing_day not in free_day_domain(requester.role, requester.id, {})
         for theirs in rows:
             target = session.get(User, theirs.user_id)
             assert target is not None
@@ -205,17 +263,84 @@ def _find_friday_free_day_exchange(
             if not _role_compatible(target.role, mine.role):
                 continue
             held = _held_after(rows, requester.id, mine, theirs)
-            # Everything holds for the requester EXCEPT that their one free day
-            # would fall on Friday.
             if not (_h2_ok(held) and _h4_ok(held)):
                 continue
-            if _free_after(held) != {Day.FRI}:
+            if _free_after(held) != {landing_day}:
                 continue
-            if not _legal_after(
-                rows, target.id, theirs, mine, core=target.role is not UserRole.JOLLY
+            holders = _holders_after(rows, mine, theirs)
+            # H3(c) must NOT be what refuses this swap — (b) is checked first, but
+            # a pair breaking both would prove nothing about which rule fired.
+            free_map = _free_weekdays_after(session, rows, holders)
+            if any(
+                other != requester.id
+                and (partner := session.get(User, other)) is not None
+                and partner.role is requester.role
+                and landing_day in days
+                for other, days in free_map.items()
             ):
                 continue
+            if not _legal_after(session, rows, holders, target.id):
+                continue
             return mine, theirs
+    return None
+
+
+def _find_shared_free_day_exchange(
+    session: DbSession, rows: list[Assignment]
+) -> tuple[Assignment, Assignment, User] | None:
+    """An exchange that moves the REQUESTER's free day onto a day their SAME-ROLE
+    partner already rests — the H3(c) case (§2.1, v1.12). The landing day is inside
+    the requester's role domain, so clause (b) passes and only (c) can refuse.
+
+    Returns the colliding partner too, so the test can assert they are NOT a party
+    to the swap: (c) is pairwise, and a validator checking only the two parties'
+    own rows is structurally unable to see this collision."""
+    for mine in rows:
+        requester = session.get(User, mine.user_id)
+        assert requester is not None
+        if requester.role is UserRole.JOLLY or mine.day in _WEEKEND:
+            continue
+        domain = free_day_domain(requester.role, requester.id, {})
+        for theirs in rows:
+            target = session.get(User, theirs.user_id)
+            assert target is not None
+            if target.id == requester.id or theirs.day in _WEEKEND:
+                continue
+            if not _role_compatible(requester.role, theirs.role):
+                continue
+            if not _role_compatible(target.role, mine.role):
+                continue
+            held = _held_after(rows, requester.id, mine, theirs)
+            if not (_h2_ok(held) and _h4_ok(held)):
+                continue
+            free = _free_after(held)
+            if len(free) != 1:
+                continue
+            day = next(iter(free))
+            if day not in domain:  # keep clause (b) satisfied
+                continue
+            holders = _holders_after(rows, mine, theirs)
+            free_map = _free_weekdays_after(session, rows, holders)
+            partner = next(
+                (
+                    other
+                    for other, days in free_map.items()
+                    if other != requester.id
+                    and (u := session.get(User, other)) is not None
+                    and u.role is requester.role
+                    and day in days
+                ),
+                None,
+            )
+            if partner is None:
+                continue
+            partner_user = session.get(User, partner)
+            assert partner_user is not None
+            # The target must be legal on their own account, so the ONLY thing
+            # wrong with this swap is the requester's H3(c) collision.
+            if not _legal_after(session, rows, holders, target.id):
+                continue
+            return mine, theirs, partner_user
     return None
 
 
@@ -545,19 +670,27 @@ def test_h4_violation_is_refused(client: TestClient, session: DbSession) -> None
     assert session.scalars(select(SwapRequest)).all() == []
 
 
-def test_h3_violation_when_the_free_day_would_land_on_friday(
+def test_h3_role_domain_violation_when_the_free_day_would_land_on_friday(
     client: TestClient, session: DbSession
 ) -> None:
-    """§4/§2.1 H3: a core worker's free day must stay inside Mon–Thu. Trading a
-    Friday slot for a slot on the worker's current free day pushes the free day
-    onto Friday — outside the default domain — so the swap is refused.
+    """§4/§2.1 H3(b): a core worker's free day must stay inside their ROLE domain —
+    spiaggini {Mon, Tue}, bagnini {Tue, Wed}. Trading a Friday slot for a slot on
+    the worker's current free day pushes the free day onto Friday, which is outside
+    every default domain, so the swap is refused.
 
-    The other party is required to remain legal, so the refusal can only be the
-    requester's H3 — and the requester is the party validated first."""
+    The refusal reason is `swap_h3_role_domain`, NOT the `swap_h3_violation` this
+    test asserted before v1.12. That older code had a single H3 error for a single
+    uniform Mon–Thu rule; Friday is now a role-domain breach specifically, and the
+    three clauses report separately so §9 can name the real reason. The old
+    assertion accepted a message that named the wrong rule.
+
+    The other party is required to remain legal and no same-role partner collides,
+    so the refusal can only be the requester's clause (b) — and the requester is
+    the party validated first."""
     roster = create_full_roster(session)
     week = _published_week(session, roster, _future_monday())
     rows = _rows(session, week)
-    pair = _find_friday_free_day_exchange(session, rows)
+    pair = _find_out_of_domain_free_day_exchange(session, rows, Day.FRI)
     assert pair is not None, "this week offers no exchange pushing a free day to Friday"
     mine, theirs = pair
     requester = session.get(User, mine.user_id)
@@ -567,21 +700,78 @@ def test_h3_violation_when_the_free_day_would_land_on_friday(
     login(client, requester.username)
     code, body = _create(client, target, mine, theirs)
     assert code == 422, body
-    assert body["detail"] == "swap_h3_violation"
+    assert body["detail"] == "swap_h3_role_domain"
+
+
+def test_h3_role_domain_violation_when_a_bagnino_would_rest_on_monday(
+    client: TestClient, session: DbSession
+) -> None:
+    """§4/§2.1 H3(b) v1.12, the case a uniform Mon–Thu rule could not express at
+    all: Monday is a perfectly ordinary free day — for a SPIAGGINO. A bagnino's
+    domain is {Tue, Wed}, so a swap landing his free day on Monday is refused with
+    `swap_h3_role_domain`. A validator carrying a role-blind domain would accept
+    this swap and quietly produce a week the solver itself would call infeasible."""
+    roster = create_full_roster(session)
+    week = _published_week(session, roster, _future_monday())
+    rows = _rows(session, week)
+    pair = _find_out_of_domain_free_day_exchange(session, rows, Day.MON, UserRole.BAGNINO)
+    assert pair is not None, "this week offers no exchange resting a bagnino on Monday"
+    mine, theirs = pair
+    requester = session.get(User, mine.user_id)
+    target = session.get(User, theirs.user_id)
+    assert requester is not None and target is not None
+    assert requester.role is UserRole.BAGNINO
+
+    login(client, requester.username)
+    code, body = _create(client, target, mine, theirs)
+    assert code == 422, body
+    assert body["detail"] == "swap_h3_role_domain"
+
+
+def test_h3_shared_free_day_is_refused_even_when_the_partner_is_not_a_party(
+    client: TestClient, session: DbSession
+) -> None:
+    """§4/§2.1 H3(c) v1.12: two workers sharing a role never share a free day. The
+    landing day is INSIDE the requester's role domain, so clause (b) passes and
+    only (c) can refuse — reported as `swap_h3_shared_free_day`.
+
+    The colliding partner is deliberately NOT a party to the swap. (c) is pairwise:
+    it cannot be decided from the two parties' own rows, which is exactly why the
+    validator reads the whole week's free days. Per-party validation is
+    structurally unable to catch this case, so this is the test that distinguishes
+    a correct implementation from a plausible one."""
+    roster = create_full_roster(session)
+    week = _published_week(session, roster, _future_monday())
+    rows = _rows(session, week)
+    found = _find_shared_free_day_exchange(session, rows)
+    assert found is not None, "this week offers no exchange colliding two same-role free days"
+    mine, theirs, partner = found
+    requester = session.get(User, mine.user_id)
+    target = session.get(User, theirs.user_id)
+    assert requester is not None and target is not None
+    assert partner.id not in (requester.id, target.id), (
+        "the point of this test is a collision with an UNINVOLVED same-role worker"
+    )
+    assert partner.role is requester.role
+
+    login(client, requester.username)
+    code, body = _create(client, target, mine, theirs)
+    assert code == 422, body
+    assert body["detail"] == "swap_h3_shared_free_day"
 
 
 def test_an_accepted_sacrifice_grant_makes_the_friday_free_day_legal(
     client: TestClient, session: DbSession
 ) -> None:
     """§2.1 H3 grant of record (v1.6) reaching §4: the SAME swap refused above is
-    ACCEPTED when the worker holds an accepted sacrifice proposal for Friday —
-    the grant extends their free-day domain to Mon–Thu ∪ {Fri}, and the swap
-    validator reads that grant through the same helper the solver does. Without
-    the shared helper the two would disagree about what H3 permits."""
+    ACCEPTED when the worker holds an accepted sacrifice proposal for Friday — the
+    grant extends their free-day domain to `role-domain ∪ {Fri}`, and the swap
+    validator reads that grant through the same helper the solver does. Without the
+    shared helper the two would disagree about what H3 permits."""
     roster = create_full_roster(session)
     week = _published_week(session, roster, _future_monday())
     rows = _rows(session, week)
-    pair = _find_friday_free_day_exchange(session, rows)
+    pair = _find_out_of_domain_free_day_exchange(session, rows, Day.FRI)
     assert pair is not None, "this week offers no exchange pushing a free day to Friday"
     mine, theirs = pair
     requester = session.get(User, mine.user_id)
@@ -629,7 +819,7 @@ def test_h2_violation_is_refused(client: TestClient, session: DbSession) -> None
             and take.day not in _WEEKEND
             and give.day not in _WEEKEND
             and not _h2_ok(_held_after(rows, mattia.id, give, take))
-            and _legal_after(rows, take.user_id, take, give, core=True)
+            and _legal_after(session, rows, _holders_after(rows, give, take), take.user_id)
         ),
         None,
     )

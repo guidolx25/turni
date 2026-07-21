@@ -20,6 +20,7 @@ from collections import defaultdict
 
 from app.enums import AssignmentRole, AssignmentSlot, Day, UserRole
 from app.solver.types import (
+    ROLE_FREE_DAYS,
     SOLVER_DAYS,
     PriorSlot,
     SlotAssignment,
@@ -39,12 +40,34 @@ CORE_IDS: frozenset[int] = frozenset({MATTEO, FRANCESCO, PASHA, AMIR})
 BAGNINO_CORE_IDS: frozenset[int] = frozenset({MATTEO, FRANCESCO})
 SPIAGGINO_CORE_IDS: frozenset[int] = frozenset({PASHA, AMIR})
 
+# §2.1 H3(b) v1.12: the free-day domain is keyed off ROLE. Kept here as a
+# per-worker view of `ROLE_FREE_DAYS` so tests never restate the days themselves —
+# widening the production domain must not silently widen the assertions.
+ROLE_OF: dict[int, UserRole] = {
+    MATTEO: UserRole.BAGNINO,
+    FRANCESCO: UserRole.BAGNINO,
+    PASHA: UserRole.SPIAGGINO,
+    AMIR: UserRole.SPIAGGINO,
+    MATTIA: UserRole.JOLLY,
+}
+
+# H3(c): the two same-role core pairs. Neither pair may share a free day.
+SAME_ROLE_PAIRS: tuple[tuple[int, int], ...] = (
+    (MATTEO, FRANCESCO),
+    (PASHA, AMIR),
+)
+
 # The photographed golden week (§8 golden test; project conventions). A Monday.
 WEEK_MONDAY: dt.date = dt.date(2026, 7, 13)
 
 # Production weights (§2.2) — imported, never hardcoded, so the tier-ordering
-# tests track the real, well-separated W1 >> W2 >> W3 constants.
+# tests track the real, well-separated W1 >> W2 constants (two tiers since v1.12).
 WEIGHTS: Weights = DEFAULT_WEIGHTS
+
+
+def role_domain(worker_id: int) -> tuple[Day, ...]:
+    """The worker's H3(b) role domain, with no §2.3 grant applied."""
+    return ROLE_FREE_DAYS[ROLE_OF[worker_id]]
 
 
 def roster() -> tuple[WorkerRef, ...]:
@@ -106,9 +129,22 @@ def worker_days(
     return out
 
 
+def jolly_load(assignments: tuple[SlotAssignment, ...]) -> dict[Day, int]:
+    """Mon–Fri → how many slots the jolly works that day (§8's emergent load).
+
+    Every solver day is present, zero included, so an assertion against the
+    expected pattern cannot pass by a missing key.
+    """
+    counts = dict.fromkeys(SOLVER_DAYS, 0)
+    for a in assignments:
+        if a.worker_id == MATTIA:
+            counts[a.day] += 1
+    return counts
+
+
 def free_day_of(assignments: tuple[SlotAssignment, ...], worker_id: int) -> Day | None:
-    """The single Mon–Thu day this core worker worked zero slots (H3), or None
-    if they worked every solver day (which would violate H3)."""
+    """The single Mon–Fri day this core worker worked zero slots (H3(a)), or None
+    if that count is not exactly one (which would violate H3(a))."""
     worked = {a.day for a in assignments if a.worker_id == worker_id}
     free = [d for d in SOLVER_DAYS if d not in worked]
     if len(free) != 1:

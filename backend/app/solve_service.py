@@ -31,7 +31,6 @@ from app.solver import (
     SolverStatus,
     WorkerRef,
     emit_weekend_template,
-    full_weekend_worker_ids,
     solve,
 )
 from app.solver.weights import DEFAULT_WEIGHTS
@@ -102,7 +101,8 @@ def build_solver_input(
       target only workers with no answered proposal).
 
     `free_day_pins` and the explicit grants are EMPTY for a normal solve; on a
-    week with no accepted proposal the H3 domains are then exactly Mon–Thu.
+    week with no accepted proposal the H3 domains are then exactly the H3(b) role
+    domains — {Mon, Tue} for the spiaggini, {Tue, Wed} for the bagnini (v1.12).
     """
     constraints = tuple(
         PersonalConstraint(worker_id=c.user_id, day=c.day, slot=c.slot, kind=c.kind)
@@ -118,9 +118,6 @@ def build_solver_input(
         free_day_pins=free_day_pins or {},
         sacrifice_grants=grants,
         prior_state=_load_prior_state(db),
-        # §2.2 S2c: the rest-spread F-pair derived structurally from THIS week's H5
-        # template, so the term fires on a first-ever week too (empty prior_state).
-        full_weekend_ids=full_weekend_worker_ids(roster, week.monday_date),
         weights=DEFAULT_WEIGHTS,
     )
 

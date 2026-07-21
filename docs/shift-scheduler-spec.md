@@ -1,6 +1,6 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.11 (2026-07-21) · **Status:** Approved for build
+**Version:** 1.12 (2026-07-21) · **Status:** Approved for build
 **v1.5:** §6 `sacrifice_proposals.conflict_note` (prose) → `conflict` (structured
 §8 unsat core, `[{worker_id, day, slot}]`), so conflicts localize at render time (§9).
 **v1.6:** the accepted `sacrifice_proposals` row is the §2.1 H3 **grant of record** —
@@ -20,6 +20,24 @@ PM 14:00–20:00 (user-supplied) — replacing the v1.7 placeholders.
 namespace with the §9 client routes (`/swaps` was both a view and an endpoint).
 `/healthz` (§11) is deliberately outside the prefix, as infrastructure rather than
 API surface; `/export/ics` is inside it, being API surface a human happens to copy.
+**v1.12:** §2.1 H3's free-day domain is **per role**, not a uniform Mon–Thu —
+observed on the live deployment and confirmed against the §8 reference week:
+spiaggini rest Mon/Tue, bagnini rest Tue/Wed, one each. Consequences:
+- **The rest-spread rule is HARDENED, not removed.** v1.11 kept "the two
+  full-weekend workers never share a free day" as a *soft* §2.2 preference
+  (`W2_SPREAD`). It is now H3 clause (c) — a **hard** constraint — and is
+  **extended to the bagnini**, who previously had no such rule at any strength.
+  The weight and its `spread_shared_pairs` objective term disappear because the
+  behaviour moved up into H3, not because the behaviour was dropped. Layouts
+  `W2_SPREAD` merely disfavoured are now infeasible.
+- **S3 / `W3` (Mattia clustering) is deleted outright.** With placement pinned by
+  role, clustering has nothing left to choose; the tier was a genuine no-op, and
+  a no-op weight is worse than no weight. Tier separation is now `W1 >> W2`.
+- §2.3's "Friday is the only reachable sacrifice day" corollary is **void** —
+  it rested on Mon–Thu being universally in-domain. Replaced by a per-role table.
+  §6's `UNIQUE(week_id, user_id)` guard on `sacrifice_proposals` is unchanged but
+  its justification is re-derived from H3 *cardinality*, which is roster- and
+  domain-independent, rather than from the Friday corollary it used to lean on.
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -46,9 +64,19 @@ A bilingual (IT/EN) web platform that schedules weekly shifts for a beach establ
 
 - **H1 — Coverage (Mon–Fri):** every slot has exactly one bagnino ∈ {Matteo, Francesco, Mattia} and exactly one spiaggino ∈ {Pasha, Amir, Mattia}.
 - **H2 — One role per slot:** a person occupies at most one role in a given slot (Mattia cannot be bagnino and spiaggino simultaneously).
-- **H3 — Free day:** each core worker (Matteo, Francesco, Pasha, Amir) has exactly **one** free day per week, restricted to **Mon–Thu**. On the free day they work zero slots.
+- **H3 — Free day (role-determined):** three clauses, all hard.
 
-  **Sacrifice grant (§2.3).** The Mon–Thu restriction is the *default* domain, not the whole rule. The domain is parameterized by an optional per-worker **sacrifice grant**: for a worker holding a grant for day `g`, the free-day domain is **Mon–Thu ∪ {g}**. A grant is issued only by the §2.3 sacrifice flow, only for the day named in the blocking hard constraint, and only for the week in question — never by a normal solve, where every domain is exactly Mon–Thu. Exactly one free day still holds (H3's cardinality is untouched); the grant widens *where* it may fall, and nothing else.
+  **(a) Cardinality.** Each core worker (Matteo, Francesco, Pasha, Amir) has exactly **one** free day per week. On the free day they work zero slots.
+
+  **(b) Role domain.** The free day falls inside the worker's **role domain**: **spiaggini (Pasha, Amir) → {Mon, Tue}**; **bagnini (Matteo, Francesco) → {Tue, Wed}**. Keyed off `users.role`, never off identity. Thursday and Friday are outside every default domain; no core worker rests on either without a §2.3 grant.
+
+  **(c) Same-role distinctness.** Two workers sharing a role never share a free day. This is *not* implied by H1/H6 coverage — a layout resting both bagnini on Wednesday (or both spiaggini on Monday) covers fine with the jolly doubling, and is excluded here deliberately, so that a role is never left to the jolly alone for a whole day.
+
+  Clauses (b) and (c) together **derive** the observed one-each partition — two workers, a two-day domain, no sharing — rather than stating it. That derivation is load-bearing: a partition asserted directly would break under any §2.3 grant, since granting one spiaggino Wednesday would leave the other owing both Monday and Tuesday. Distinctness survives a grant untouched.
+
+  **Emergent, not separately constrained.** (a)+(b)+(c) leave exactly four legal layouts (the within-pair choice, 2×2), resolved by §2.2's soft tiers. All four force the same jolly load: **Mattia works one slot Mon, two Tue, one Wed, and is free Thu/Fri.** That pattern is a *consequence* of H1+H3 and must never be encoded as a rule of its own.
+
+  **Sacrifice grant (§2.3).** The role domain is the *default*, not the whole rule. It is parameterized by an optional per-worker **sacrifice grant**: for a worker holding a grant for day `g`, the domain is **role-domain ∪ {g}**. A grant is issued only by the §2.3 sacrifice flow, only for the day named in the blocking hard constraint, and only for the week in question — never by a normal solve, where every domain is exactly the role domain. Clauses (a) and (c) are untouched by a grant: exactly one free day still holds, and a granted worker still may not share a day with their same-role partner. The grant widens *where* the free day may fall, and nothing else.
 
   **Grant of record (v1.6).** An accepted grant is durable for its week: the accepted §6 `sacrifice_proposals` row *is* the grant of record, and **every** solve of that week — cron, manual, regenerate, the accept re-solve itself — reads the week's accepted proposals and carries their grants. A grant never evaporates with the call that created it, so an accepted week cannot relapse into INFEASIBLE for the conflict it already resolved; a later infeasibility implicates a *different* core and iterates the §2.3 flow toward a different worker.
 - **H4 — One slot per working day:** on non-free weekdays (Mon–Fri), each core worker works exactly one slot (AM xor PM).
@@ -65,10 +93,12 @@ A bilingual (IT/EN) web platform that schedules weekly shifts for a beach establ
 2. **S2 — Alternation + AM/PM fairness** (weight `W2`, one combined tier):
    - *Alternation (continuous flow):* penalty for each pair of consecutive worked days with the same slot, **including the boundary with the previous week** (each worker's last worked slot is persisted in `solver_state`). Note: the fixed weekend seeds Monday — Matteo exits Sunday on PM (prefers Mon AM), Francesco exits on AM (prefers Mon PM).
    - *Fairness:* penalty on |#AM − #PM| per worker per week.
-   - *Rest spread (full-weekend workers)* (weight `W2_SPREAD`, in the S2 band): penalty for each pair of workers who work the full weekend template — both Saturday and Sunday full-day, i.e. the two full-day spiaggini — that shares the same free day, so their role is never left covered by the jolly alone for a whole day. `W2_SPREAD` is sized so that co-locating such a pair is dispreferred to the one alternation break splitting them incurs (and thus also outweighs the S3 clustering pull below). Name-agnostic: the pair is selected by weekend-template membership, never by identity. Empirically confirmed across observed weeks — the two full-weekend workers always split their free days (one Monday, one Tuesday) rather than both resting Monday, accepting that the jolly may work an extra day.
-3. **S3 — Mattia free-day clustering** (weight `W3`): **prefer pairing** core workers' free days on the same day(s), so Mattia doubles on fewer days and gets full days off (observed pattern: two pairs → two Mattia full days off, typically Tuesday). Do **not** hardcode a preferred day. This general pairing preference yields to the S2 rest-spread term above for the two full-weekend workers, who are spread rather than clustered. `W3` must be an easily editable named constant with a comment noting this tier is expected to change.
 
-Weight separation: `W1 >> {W2, W2_SPREAD} >> W3` (e.g., 10 000 / 100 / 200 / 1 — `W2_SPREAD` sits in the S2 band: above a single `W2` alternation unit but far below `W1`). Document in code.
+   *(v1.12: the former rest-spread term `W2_SPREAD` is gone from this tier — not dropped but promoted to H3 clause (c), where it is hard rather than soft and covers both role pairs rather than only the full-weekend spiaggini.)*
+
+*(v1.12: there is no S3. Free-day placement is fixed by H3, so the former Mattia-clustering tier had nothing left to optimize and was removed rather than left as a no-op weight.)*
+
+Weight separation: `W1 >> W2` (e.g., 10 000 / 100). Document in code.
 
 ### 2.3 Sacrifice flow (infeasibility resolution)
 
@@ -77,16 +107,28 @@ Weight separation: `W1 >> {W2, W2_SPREAD} >> W3` (e.g., 10 000 / 100 / 200 / 1 �
 3. On accept → re-solve with the free day pinned. On decline → escalate to admin (Mattia) with the conflict explanation.
 4. Never resolve silently.
 
-**What is being traded.** The worker sacrifices their *weekday free-day placement*, never their hard request. H7 is inviolable: an accepted proposal still honors the hard unavailability in full — the worker asked to be off day `{day}` and is off day `{day}`, having given up the Mon–Thu free day they would otherwise have taken. A proposal never withdraws, downgrades, or supersedes the request that caused the conflict.
+**What is being traded.** The worker sacrifices their *weekday free-day placement*, never their hard request. H7 is inviolable: an accepted proposal still honors the hard unavailability in full — the worker asked to be off day `{day}` and is off day `{day}`, having given up the role-domain free day (H3(b)) they would otherwise have taken. A proposal never withdraws, downgrades, or supersedes the request that caused the conflict.
 
-**Mechanics — domain extension, not a bare pin.** The probe in step 2 and the re-solve in step 3 both carry a **sacrifice grant** (H3) extending that one worker's free-day domain to the conflicted day: `Mon–Thu ∪ {day}`. This is load-bearing and must not be reduced to pinning a free day inside Mon–Thu. A pin alone only *adds* `free[u][d] = 1` to an otherwise unchanged model, so the probe's feasible region would be a subset of the plain solve's — an INFEASIBLE week would stay INFEASIBLE under every pin and step 2 could never fire. The grant is what makes the propose branch reachable at all.
+**Mechanics — domain extension, not a bare pin.** The probe in step 2 and the re-solve in step 3 both carry a **sacrifice grant** (H3) extending that one worker's free-day domain to the conflicted day: `role-domain ∪ {day}`. This is load-bearing and must not be reduced to pinning a free day inside the role domain. A pin alone only *adds* `free[u][d] = 1` to an otherwise unchanged model, so the probe's feasible region would be a subset of the plain solve's — an INFEASIBLE week would stay INFEASIBLE under every pin and step 2 could never fire. The grant is what makes the propose branch reachable at all.
 
-**Corollary — Friday is the only reachable sacrifice day.** A proposal fires **iff** the unsat core implicates a hard constraint on a **Friday**, held by a **core** worker who has not already answered a proposal for this week (§2.3 step 3 never re-offers), and the Friday-extended probe is feasible. The other days are unreachable by construction:
-- **Mon–Thu** — a grant is a no-op there. The day is already inside the default domain, so the extended probe reduces to the plain solve plus a pin, and a pin only *adds* `free[u][d] = 1` to an otherwise unchanged model: its feasible region is a subset of the plain solve's, so an INFEASIBLE week stays INFEASIBLE. This holds for slot-level and full-day requests alike, and is the same monotonicity argument as the Mechanics paragraph above. Such a conflict escalates (step 3).
+**Reachable sacrifice days (v1.12 — replaces the former "Friday only" corollary).** A proposal fires **iff** the unsat core implicates a hard constraint on a day **outside the holder's H3(b) role domain**, held by a **core** worker who has not already answered a proposal for this week (step 3 never re-offers), and the extended probe is feasible. Since the role domains differ, so do the reachable days:
+
+| Role | Mon | Tue | Wed | Thu | Fri |
+|---|---|---|---|---|---|
+| **Spiaggino** (domain Mon/Tue) | in-domain | in-domain | **reachable** | **reachable** | **reachable** |
+| **Bagnino** (domain Tue/Wed) | **reachable** | in-domain | in-domain | **reachable** | **reachable** |
+
+Every cell marked reachable has a feasible extended probe, so all six genuinely reach step 2 rather than escalating. The unreachable cases:
+- **In-domain days** — a grant is a no-op there. The day is already inside the role domain, so the extended probe reduces to the plain solve plus a pin, and a pin only *adds* `free[u][d] = 1` to an otherwise unchanged model: its feasible region is a subset of the plain solve's, so an INFEASIBLE week stays INFEASIBLE. Holds for slot-level and full-day requests alike. Such a conflict escalates (step 3).
 - **Sat/Sun** — H5 makes the weekend a fixed template with no solver variables, so no free-day move can absorb a weekend request. These escalate to the admin at submission time instead (§10 `weekend_hard_escalated`).
-- **Friday** — the sole day that H4 forces worked but H3's default domain cannot free. Hence the only day where extending the domain changes the outcome.
 
-A Friday conflict whose extended probe is *still* infeasible produces no proposal and escalates (step 3) like any other.
+Only **hard full-day** requests reach the table at all. A slot-level hard request needs no free-day move: H4 lets the worker take the other slot of that day, so it never lands in a free-day conflict.
+
+A conflict on a reachable day whose extended probe is *still* infeasible produces no proposal and escalates (step 3) like any other. Two cases do so systematically, and neither creates a proposal row:
+- **One worker, two out-of-domain full-day requests.** H7 demands zero slots on both days; H3(a) allows exactly one free day; a grant widens *where* the free day falls, never how many there are. No single grant satisfies both.
+- **Both same-role workers, the same out-of-domain day.** H3(c) forbids them sharing a free day at any strength, granted or not.
+
+**Why one proposal per worker per week is enough (§6 `UNIQUE(week_id, user_id)`).** Not because the candidate day is unique — v1.12 gives each role three of them. The guard holds on **H3(a) cardinality**: a worker has exactly one free day, so at most one free-day move can ever be on the table for them in a given week. Two simultaneous proposals to one worker would require two free days to move. This reasoning is independent of the roster and of the domains, where the superseded Friday-only argument was an artifact of Mon–Thu happening to leave exactly one gap.
 
 ---
 
@@ -278,16 +320,16 @@ Auth: `argon2` password hashing, server-side sessions (signed cookie, `HttpOnly`
 
 **Variables** (Mon–Fri only; weekend is template):
 
-- `free[u][d]` ∈ Bool for core u, d ∈ D(u), with Σ_d free[u][d] = 1. The domain `D(u)` is `{Mon..Thu}` for every worker on a normal solve, and `{Mon..Thu} ∪ {g}` for a worker carrying a §2.3 sacrifice grant for day `g` (in practice `g = Fri`; see the §2.3 corollary). The cardinality constraint is unchanged in either case.
+- `free[u][d]` ∈ Bool for core u, d ∈ D(u), with Σ_d free[u][d] = 1 (H3(a)). The domain `D(u)` is the worker's H3(b) **role domain** on a normal solve — `{Mon, Tue}` for a spiaggino, `{Tue, Wed}` for a bagnino — and `role-domain ∪ {g}` for a worker carrying a §2.3 sacrifice grant for day `g` (see the §2.3 reachable-days table). The cardinality constraint is unchanged in either case. H3(c) adds, for each same-role pair `(u, v)` and each day `d` in both domains, `free[u][d] + free[v][d] ≤ 1`.
 - `x[u][d][s][r]` ∈ Bool: user u works day d, slot s, role r — restricted to role-compatible (u,r) pairs (Mattia compatible with both).
 
 **Constraints:** direct encodings of H1–H7. Hard personal constraints enter as **assumption literals** so infeasibility explanations name the responsible constraint (feeds the sacrifice flow).
 
-**Objective:** minimize `W1·(unmet soft requests) + W2·(alternation breaks + fairness deviation) + W2_SPREAD·(full-weekend worker pairs sharing a free day) + W3·(days on which Mattia works ≥ 1 slot)` — note S3 is expressed as *minimizing Mattia's worked days*, which is equivalent to maximizing his full free days and induces free-day pairing (except for the two full-weekend workers, whom the `W2_SPREAD` term spreads apart).
+**Objective:** minimize `W1·(unmet soft requests) + W2·(alternation breaks + fairness deviation)`. H3 leaves only the 2×2 within-pair choice of free days, and this objective is what resolves it.
 
 **State:** after publish, write each worker's `last_worked_slot`/`last_worked_date` (Sunday PM for Matteo, etc., from the weekend template) into `solver_state`.
 
-**Golden test:** given the free days of the photographed week (Pasha Mon, Francesco+Amir Tue, Matteo Wed) as pinned inputs, the solver must produce a valid schedule matching the photo's coverage structure (Mattia doubling Tuesday, all slots covered, one slot per worker per day). This is the regression anchor.
+**Golden test:** the photographed week (Pasha Mon, Francesco+Amir Tue, Matteo Wed) must be reproduced **unpinned** (v1.12 — the free days were previously supplied as pinned inputs). H3 now derives the role-day structure, so the test asserts that structure directly: each spiaggino free in {Mon, Tue} and each bagnino in {Tue, Wed}, no same-role pair sharing, and the emergent jolly load Mon 1 / Tue 2 / Wed 1 / Thu 0 / Fri 0. The within-pair choice is left to §2.2 and is the only part the photo pins by observation rather than by rule. This is the regression anchor.
 
 Solve time expectation: < 1 s (trivial search space). Fail loudly if > 10 s.
 
@@ -345,7 +387,7 @@ Each phase ends with: tests green, gate checklist verified manually, commit tagg
 
 **Phase 1 — Data + auth.** SQLAlchemy models, migrations, session auth, seed script (5 users — see §5's single-account build decision), role/permission middleware. *Gate:* login/logout works for all roles; root invisible to a non-root user listing.
 
-**Phase 2 — Solver core.** CP-SAT model, weekend template emission, solver_state continuity, assumption-literal infeasibility explanation. **Test-heavy phase:** golden test (photographed week), infeasibility tests, alternation-across-weeks test, Mattia-clustering test. *Gate:* all solver tests pass; golden week reproduced.
+**Phase 2 — Solver core.** CP-SAT model, weekend template emission, solver_state continuity, assumption-literal infeasibility explanation. **Test-heavy phase:** golden test (photographed week), infeasibility tests, alternation-across-weeks test, H3 role-domain and same-role-distinctness tests. *Gate:* all solver tests pass; golden week reproduced unpinned.
 
 **Phase 3 — Constraints lifecycle.** Constraint CRUD (multi-week), window open/close logic, cron solve at Sun 17:00, publish + lock, sacrifice flow end-to-end. *Gate:* full simulated week from submissions → publish, including one forced infeasibility → sacrifice → accept → re-solve.
 
@@ -361,5 +403,5 @@ Each phase ends with: tests green, gate checklist verified manually, commit tagg
 
 - PWA push notifications (Channel 3)
 - Admin approval on swaps (flag exists, defaults off)
-- Changes to the Mattia-clustering objective (isolated behind `W3`)
+- Re-wording the §2.3 sacrifice prompt (§10 / i18n). v1.12 makes the prompt reachable on Wed/Thu (spiaggini) and Mon/Thu (bagnini), so it now commonly reaches a worker who asked for exactly that day off as a hard request, to whom "No feasible schedule" reads as a rejection of the request rather than as the offer it is. Target shape: name the trade — *"we can't cover Wednesday otherwise — take Wednesday as your rest day this week instead of your usual Monday?"* — rather than leading with infeasibility. Copy-only; the flow and its mechanics are unchanged.
 - Sunday bagnini rotation logic (weekend is a fixed template; swaps handle exceptions)

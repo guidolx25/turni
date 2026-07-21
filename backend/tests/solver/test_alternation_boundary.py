@@ -13,6 +13,13 @@ Monday boundary behaves per `PriorSlot`:
 
 Single-worker priors isolate the term: only the target worker carries a
 boundary, so its effect on `alternation_breaks` is a clean constant offset.
+
+Each test pins the target's free day so they definitely work Monday, and every
+such pin sits inside the worker's H3(b) ROLE domain (§2.1, v1.12) — Wed for the
+bagnini, Tue for the spiaggino. An out-of-domain pin is silently ignored by the
+model (§8), which would leave the target free to rest on Monday and drain the
+boundary assertions of meaning; `test_the_pins_are_inside_the_role_domains`
+guards exactly that.
 """
 
 from __future__ import annotations
@@ -27,6 +34,8 @@ from tests.solver.fixtures import (
     PASHA,
     WEEK_MONDAY,
     WEIGHTS,
+    free_day_of,
+    role_domain,
     roster,
     worker_days,
 )
@@ -52,16 +61,30 @@ def _monday_slots(res, wid) -> set[AssignmentSlot]:
     return {a.slot for a in worker_days(res.assignments, wid).get(Day.MON, [])}
 
 
+def test_the_pins_are_inside_the_role_domains() -> None:
+    """Guard for every construction in this file (§2.1 H3(b), v1.12): the pins
+    below are only enforced because they sit inside the pinned worker's role
+    domain. If one drifted out of domain the model would ignore it, the target
+    could rest on Monday, and the boundary assertions would pass vacuously."""
+    assert Day.WED in role_domain(MATTEO)
+    assert Day.WED in role_domain(FRANCESCO)
+    assert Day.TUE in role_domain(PASHA)
+    for wid, pin in ((MATTEO, Day.WED), (FRANCESCO, Day.WED), (PASHA, Day.TUE)):
+        res = _solve({}, {wid: pin})
+        assert free_day_of(res.assignments, wid) is pin
+        assert Day.MON in worker_days(res.assignments, wid)
+
+
 def test_prior_pm_prefers_monday_am() -> None:
     """PriorSlot.PM penalizes Mon PM but not Mon AM → the worker takes Mon AM."""
-    res = _solve({MATTEO: PriorSlot.PM}, {MATTEO: Day.THU})
+    res = _solve({MATTEO: PriorSlot.PM}, {MATTEO: Day.WED})
     assert res.status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE)
     assert _monday_slots(res, MATTEO) == {AssignmentSlot.AM}
 
 
 def test_prior_am_prefers_monday_pm() -> None:
     """PriorSlot.AM is symmetric: penalizes Mon AM → the worker takes Mon PM."""
-    res = _solve({FRANCESCO: PriorSlot.AM}, {FRANCESCO: Day.THU})
+    res = _solve({FRANCESCO: PriorSlot.AM}, {FRANCESCO: Day.WED})
     assert res.status in (SolverStatus.OPTIMAL, SolverStatus.FEASIBLE)
     assert _monday_slots(res, FRANCESCO) == {AssignmentSlot.PM}
 
@@ -72,8 +95,8 @@ def test_prior_full_day_breaks_monday_am_exactly_once() -> None:
     is ABSENT from prior_state: the break count rises by EXACTLY one (never two,
     which a model double-counting the FULL_DAY prior would produce)."""
     force_am = (PersonalConstraint(PASHA, Day.MON, ConstraintSlot.PM, ConstraintKind.HARD),)
-    full = _solve({PASHA: PriorSlot.FULL_DAY}, {PASHA: Day.THU}, force_am)
-    absent = _solve({}, {PASHA: Day.THU}, force_am)
+    full = _solve({PASHA: PriorSlot.FULL_DAY}, {PASHA: Day.TUE}, force_am)
+    absent = _solve({}, {PASHA: Day.TUE}, force_am)
     assert full.objective is not None and absent.objective is not None
     assert _monday_slots(full, PASHA) == {AssignmentSlot.AM}
     assert full.objective.alternation_breaks - absent.objective.alternation_breaks == 1
@@ -83,8 +106,8 @@ def test_prior_full_day_breaks_monday_pm_exactly_once() -> None:
     """FULL_DAY collides with Mon PM too — the break is unavoidable in EITHER
     direction. Forcing Pasha to Mon PM raises the count by exactly one vs absent."""
     force_pm = (PersonalConstraint(PASHA, Day.MON, ConstraintSlot.AM, ConstraintKind.HARD),)
-    full = _solve({PASHA: PriorSlot.FULL_DAY}, {PASHA: Day.THU}, force_pm)
-    absent = _solve({}, {PASHA: Day.THU}, force_pm)
+    full = _solve({PASHA: PriorSlot.FULL_DAY}, {PASHA: Day.TUE}, force_pm)
+    absent = _solve({}, {PASHA: Day.TUE}, force_pm)
     assert full.objective is not None and absent.objective is not None
     assert _monday_slots(full, PASHA) == {AssignmentSlot.PM}
     assert full.objective.alternation_breaks - absent.objective.alternation_breaks == 1
@@ -98,8 +121,8 @@ def test_worker_absent_from_prior_state_incurs_no_boundary_term() -> None:
     worker)."""
     force_am = (PersonalConstraint(PASHA, Day.MON, ConstraintSlot.PM, ConstraintKind.HARD),)
     force_pm = (PersonalConstraint(PASHA, Day.MON, ConstraintSlot.AM, ConstraintKind.HARD),)
-    am = _solve({}, {PASHA: Day.THU}, force_am)
-    pm = _solve({}, {PASHA: Day.THU}, force_pm)
+    am = _solve({}, {PASHA: Day.TUE}, force_am)
+    pm = _solve({}, {PASHA: Day.TUE}, force_pm)
     assert am.objective is not None and pm.objective is not None
     # No prior → neither Monday slot is boundary-penalized, so the achievable
     # break minimum is identical whichever slot Pasha is pinned into.

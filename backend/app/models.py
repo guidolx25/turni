@@ -264,8 +264,9 @@ class SacrificeProposal(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    # A free day (H3: Mon–Thu); the Mon–Thu narrowing is a solver/app rule, the
-    # column's domain is the full §6 day enum.
+    # A free day (H3). Which days are legal is a solver/app rule — v1.12 makes it
+    # per role, and a §2.3 grant widens it further — so the column's domain stays
+    # the full §6 day enum rather than encoding any narrowing.
     proposed_free_day: Mapped[Day] = mapped_column(enum_column(Day, "day"), nullable=False)
     status: Mapped[SacrificeStatus] = mapped_column(
         enum_column(SacrificeStatus, "sacrifice_status"),
@@ -279,11 +280,13 @@ class SacrificeProposal(Base):
     created_at: Mapped[dt.datetime] = mapped_column(UtcDateTime, nullable=False, default=utcnow)
 
     __table_args__ = (
-        # §6 (v1.6): one proposal per (week, worker). Safe by construction —
-        # Friday is the only reachable sacrifice day (§2.3 corollary), so one
-        # worker can never legitimately hold two proposals in a week — and
-        # load-bearing: the ACCEPTED row is the grant of record (§2.1 H3), so a
-        # second row for the same worker could silently widen the H3 domain twice.
+        # §6 (v1.6): one proposal per (week, worker). Safe by construction — but
+        # on H3(a) CARDINALITY, not on the candidate day being unique (v1.12 gives
+        # each role three reachable days, superseding the Friday-only corollary):
+        # a worker has exactly one free day, so at most one free-day move can ever
+        # be on the table for them in a week. And load-bearing: the ACCEPTED row is
+        # the grant of record (§2.1 H3), so a second row for the same worker could
+        # silently widen the H3 domain twice.
         UniqueConstraint("week_id", "user_id"),
     )
 

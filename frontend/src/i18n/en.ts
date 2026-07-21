@@ -229,8 +229,6 @@ export const en = {
   'admin.solve.objective.softUnmet': 'Unmet preferences',
   'admin.solve.objective.alternation': 'Alternation breaks',
   'admin.solve.objective.fairness': 'Morning/afternoon imbalance',
-  'admin.solve.objective.spread': 'Weekend pairs sharing a free day',
-  'admin.solve.objective.jollyDays': 'Days worked by the jolly',
   'admin.solve.objective.total': 'Weighted total',
   'admin.solve.blocking': 'Conflicting binding requests',
   'admin.solve.blocking.help':
@@ -269,6 +267,10 @@ export const en = {
     'The change was applied anyway: the decision is yours. These situations are left for you to sort out by hand.',
   'admin.override.violation.h2': '{name}: two roles in the same slot ({day}, {slot}).',
   'admin.override.violation.h3': '{name}: no free day this week.',
+  'admin.override.violation.h3_role_domain':
+    '{name}: rest day outside the days allowed for their role.',
+  'admin.override.violation.h3_shared_free_day':
+    '{name}: rests on the same day as another worker with the same role.',
   'admin.override.violation.h4': '{name}: more than one slot on the same day ({day}).',
   'admin.override.violation.other': '{name}: constraint {rule} is broken.',
   'admin.override.someone': 'A worker',
@@ -381,6 +383,10 @@ export const en = {
   'errors.swap_role_invalid': 'The two shifts have incompatible roles.',
   'errors.swap_h2_violation': 'The swap would give someone two roles in the same slot.',
   'errors.swap_h3_violation': 'The swap would make someone work on their free day.',
+  'errors.swap_h3_role_domain':
+    "The swap would move someone's rest day outside the days allowed for their role.",
+  'errors.swap_h3_shared_free_day':
+    'The swap would leave two workers with the same role resting on the same day.',
   'errors.swap_h4_violation': 'The swap would give someone two slots on the same day.',
   'errors.swap_weekend_bagnini_only': 'On weekends only lifeguard shifts can be swapped.',
   'errors.swap_already_resolved': 'Swap request already resolved.',

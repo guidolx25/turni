@@ -193,8 +193,6 @@ test('solving does not publish; publishing is a second, explicit action', async 
           soft_unmet: 0,
           alternation_breaks: 1,
           fairness_deviation: 0,
-          spread_shared_pairs: 0,
-          jolly_days: 3,
           weighted_total: 103,
         },
         blocking_constraints: [],

@@ -37,12 +37,23 @@ import { weekdayLabel } from '../../lib/dates'
 
 const SLOT_ORDER = ['am', 'pm'] as const
 
-/** §2.1 rule ids as the backend spells them, lowercased for the key lookup. */
+/** §2.1 rule ids as the backend spells them, lowercased for the key lookup.
+ * H3 arrives as one of three clause ids, each with its own sentence: a single
+ * H3 line would name the wrong reason for two of the three refusals. */
 const VIOLATION_KEYS: Record<string, TranslationKey> = {
   h2: 'admin.override.violation.h2',
   h3: 'admin.override.violation.h3',
+  h3_role_domain: 'admin.override.violation.h3_role_domain',
+  h3_shared_free_day: 'admin.override.violation.h3_shared_free_day',
   h4: 'admin.override.violation.h4',
 }
+
+/** The lines whose sentence needs only the worker's name. */
+const NAME_ONLY_KEYS: readonly TranslationKey[] = [
+  'admin.override.violation.h3',
+  'admin.override.violation.h3_role_domain',
+  'admin.override.violation.h3_shared_free_day',
+]
 
 function ViolationList({
   violations,
@@ -63,7 +74,7 @@ function ViolationList({
     const slot = violation.slot ? t(`slot.${violation.slot}`) : null
     // A rule whose sentence needs a field the payload did not carry falls back
     // to the generic line rather than printing an empty placeholder.
-    if (key === 'admin.override.violation.h3') return t(key, { name })
+    if (key !== undefined && NAME_ONLY_KEYS.includes(key)) return t(key, { name })
     if (key === 'admin.override.violation.h4' && day) return t(key, { name, day })
     if (key === 'admin.override.violation.h2' && day && slot) return t(key, { name, day, slot })
     return t('admin.override.violation.other', { name, rule: violation.rule })

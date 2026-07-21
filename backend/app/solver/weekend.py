@@ -17,7 +17,6 @@ Saturday-AM / Sunday-PM position. That reproduces the photographed convention
 from __future__ import annotations
 
 import datetime as dt
-from collections import defaultdict
 from dataclasses import dataclass
 
 from app.enums import (
@@ -112,28 +111,3 @@ def emit_weekend_template(
             for slot in (AssignmentSlot.AM, AssignmentSlot.PM):
                 rows.append(WeekendAssignment(day_date, slot, AssignmentRole.SPIAGGINO, sp.id))
     return tuple(rows)
-
-
-# Every full-day weekend slot (§H5): both AM and PM on both Saturday and Sunday.
-_ALL_WEEKEND_FULL_DAY: frozenset[tuple[Day, AssignmentSlot]] = frozenset(
-    (d, s) for d in (Day.SAT, Day.SUN) for s in (AssignmentSlot.AM, AssignmentSlot.PM)
-)
-
-
-def full_weekend_worker_ids(
-    roster: tuple[WorkerRef, ...],
-    week_monday: dt.date,
-) -> frozenset[int]:
-    """The ids of the core workers who work THIS week's FULL weekend template —
-    both Saturday and Sunday, both slots — i.e. the two full-day spiaggini (§H5).
-
-    This is the §2.2 rest-spread F-pair, derived STRUCTURALLY from the emitted H5
-    template rather than from any carried-forward `solver_state`. It is what lets
-    the S2c rest-spread term fire on a first-ever week (empty `prior_state`), and
-    stays name-agnostic: membership is read off the template the fixed H5 rule
-    already produces, never off identity. Pure: no DB, no I/O.
-    """
-    covered: dict[int, set[tuple[Day, AssignmentSlot]]] = defaultdict(set)
-    for r in emit_weekend_template(roster, week_monday):
-        covered[r.worker_id].add((r.day, r.slot))
-    return frozenset(wid for wid, slots in covered.items() if slots >= _ALL_WEEKEND_FULL_DAY)

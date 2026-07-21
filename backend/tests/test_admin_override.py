@@ -97,8 +97,8 @@ def _weekday_bagnino_pair(
     test needs: moving one onto the other's slot doubles that worker's day (H4)
     and leaves the displaced one with a second free weekday (H3). The jolly is
     exempt from both (H6), so a pair including him would prove nothing. Such a day
-    always exists: on Friday no core worker is free (H3's default domain is
-    Mon–Thu), so both core bagnini work it.
+    always exists: Thursday and Friday are outside every H3(b) role domain
+    ({Mon, Tue} spiaggini, {Tue, Wed} bagnini), so both core bagnini work them.
     """
     for day in SOLVER_DAYS:
         by_slot = {a.slot: a for a in rows if a.day is day and a.role is AssignmentRole.BAGNINO}
@@ -373,6 +373,92 @@ def test_override_reports_the_h3_h4_violations_it_creates(
         ("H3", displaced),
     }, violations
     assert all(v["rule"] in {"H2", "H3", "H4"} for v in violations)
+
+
+def _free_weekday(rows: list[Assignment], user_id: int) -> Day:
+    """The single weekday this worker holds no slot on."""
+    worked = {a.day for a in rows if a.user_id == user_id and a.day in SOLVER_DAYS}
+    free = [d for d in SOLVER_DAYS if d not in worked]
+    assert len(free) == 1, f"user {user_id} must start with exactly one free weekday: {free}"
+    return free[0]
+
+
+def _bagnino_row(rows: list[Assignment], day: Day, user_id: int) -> Assignment:
+    return next(
+        a
+        for a in rows
+        if a.day is day and a.role is AssignmentRole.BAGNINO and a.user_id == user_id
+    )
+
+
+def test_override_reports_h3_role_domain_when_a_bagnino_lands_on_monday(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.1 H3(b) v1.12 on the override surface: the three H3 clauses report under
+    their OWN rule ids, because one shared id could only be rendered with one
+    sentence and would show the admin a WRONG reason for two of the three.
+
+    Two overrides move a bagnino's single free day from inside his {Tue, Wed}
+    domain onto MONDAY — a day that is perfectly legal for a spiaggino and illegal
+    for him. The first override only takes his Monday slot away (leaving him two
+    free days, plain "H3"); the second gives him back a slot on his old free day,
+    so he ends with exactly one free day, in the wrong place. That is
+    `H3_ROLE_DOMAIN`, not `H3`.
+    """
+    roster = create_full_roster(session)
+    week = _published_week(session, roster, _future_monday())
+    rows = _rows(session, week)
+    matteo, francesco, mattia = roster["matteo"], roster["francesco"], roster["mattia"]
+    free = _free_weekday(rows, matteo.id)
+    assert free in (Day.TUE, Day.WED), "precondition: a bagnino rests inside {Tue, Wed}"
+
+    login(client, "mattia")
+    # 1. Francesco doubles Monday, so Matteo loses his Monday slot (H4 + H3(a)).
+    first = _override(client, week, _bagnino_row(rows, Day.MON, matteo.id), francesco.id)
+    assert first.status_code == 200, first.text
+    assert ("H3", matteo.id) in {(v["rule"], v["user_id"]) for v in first.json()["violations"]}, (
+        "two free weekdays is the CARDINALITY clause, reported as plain H3"
+    )
+
+    # 2. Matteo takes the jolly's slot on his old free day → one free day, on Monday.
+    second = _override(client, week, _bagnino_row(rows, free, mattia.id), matteo.id)
+    assert second.status_code == 200, second.text
+    violations = {(v["rule"], v["user_id"], v.get("day")) for v in second.json()["violations"]}
+    assert ("H3_ROLE_DOMAIN", matteo.id, Day.MON.value) in violations, violations
+
+
+def test_override_reports_h3_shared_free_day_for_a_same_role_pair(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.1 H3(c) v1.12 on the override surface: two workers sharing a role never
+    share a free day, reported as `H3_SHARED_FREE_DAY` and located on the shared
+    day. The clause is PAIRWISE, so unlike (a)/(b) it cannot be decided from the
+    reported worker's own rows — the whole week's free days must be read.
+
+    Two overrides move the second bagnino's free day onto the first one's, both
+    days being inside the shared {Tue, Wed} domain so that clause (b) passes and
+    only (c) can fire."""
+    roster = create_full_roster(session)
+    week = _published_week(session, roster, _future_monday())
+    rows = _rows(session, week)
+    matteo, francesco, mattia = roster["matteo"], roster["francesco"], roster["mattia"]
+    first_free = _free_weekday(rows, matteo.id)
+    second_free = _free_weekday(rows, francesco.id)
+    assert first_free is not second_free, "precondition: H3(c) holds in the solved week"
+
+    login(client, "mattia")
+    # 1. The jolly takes Francesco's slot on Matteo's free day → Francesco is now
+    #    free on both days (H3(a): cardinality).
+    first = _override(client, week, _bagnino_row(rows, first_free, francesco.id), mattia.id)
+    assert first.status_code == 200, first.text
+    assert ("H3", francesco.id) in {(v["rule"], v["user_id"]) for v in first.json()["violations"]}
+
+    # 2. Francesco takes the jolly's slot on his OWN old free day → exactly one
+    #    free day again, and it is Matteo's.
+    second = _override(client, week, _bagnino_row(rows, second_free, mattia.id), francesco.id)
+    assert second.status_code == 200, second.text
+    violations = {(v["rule"], v["user_id"], v.get("day")) for v in second.json()["violations"]}
+    assert ("H3_SHARED_FREE_DAY", francesco.id, first_free.value) in violations, violations
 
 
 def test_override_of_a_clean_swap_reports_no_violations(

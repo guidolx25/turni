@@ -59,7 +59,7 @@ from app.notifications import EVENT_ADMIN_OVERRIDE, notify
 from app.publish_service import write_solver_state
 from app.roles import can_hold
 from app.solve_service import accepted_sacrifice_grants
-from app.solver import FREE_DAYS, SOLVER_DAYS
+from app.solver import SOLVER_DAYS, free_day_domain
 
 _WEEKEND_DAYS = frozenset((Day.SAT, Day.SUN))
 
@@ -245,18 +245,28 @@ def week_violations(db: DbSession, week: Week, user_ids: list[int]) -> tuple[Vio
     """The §2.1 H2/H3/H4 rules `user_ids` no longer satisfy in `week`, as data.
 
     Evaluated against the week's persisted rows *after* the change, for the
-    affected workers only — an override cannot make a third party illegal, since
-    nobody else's rows moved.
+    affected workers only. Their *own* rows are the only ones that moved, but H3(c)
+    (v1.12) is a pairwise rule, so a violation can name an affected worker while
+    the day it collides on belongs to an untouched same-role partner — the pair is
+    read from the whole week and reported against the worker who was moved.
 
     Scope mirrors the §4 swap validator exactly: H2 ranges over the whole week
     (holding two roles at one instant is impossible on any day), H3/H4 over Mon–Fri
     only (H5's weekend is a template whose full-day workers legitimately hold two
-    slots a day), the jolly is exempt from H3/H4 (H6), and H3's domain is Mon–Thu
-    widened by the week's accepted §2.3 grant (the v1.6 grant of record, read
-    through `accepted_sacrifice_grants` — the same helper every solve uses).
+    slots a day), the jolly is exempt from H3/H4 (H6), and H3's three clauses are
+    all checked — (a) exactly one free weekday, (b) inside the worker's ROLE domain
+    ({Mon, Tue} spiaggini, {Tue, Wed} bagnini) widened by the week's accepted §2.3
+    grant, (c) no same-role pair sharing a free day. The domain comes from the
+    solver's `free_day_domain` and the grant from `accepted_sacrifice_grants` —
+    the same two helpers every solve uses, never a local copy.
+
+    Each H3 clause reports under its own rule id ("H3", "H3_ROLE_DOMAIN",
+    "H3_SHARED_FREE_DAY") so §9 can name the real reason; at most one fires per
+    worker, the clauses being checked in order.
     """
     rows = list(db.scalars(select(Assignment).where(Assignment.week_id == week.id)).all())
     grants = accepted_sacrifice_grants(db, week)
+    free_days = _free_weekdays(db, rows)
     found: list[Violation] = []
     for uid in user_ids:
         user = db.get(User, uid)
@@ -276,15 +286,49 @@ def week_violations(db: DbSession, week: Week, user_ids: list[int]) -> tuple[Vio
         for day in SOLVER_DAYS:
             if day_counts[day] > 1:
                 found.append(Violation("H4", uid, day))
-        # H3: exactly one free weekday, inside Mon–Thu ∪ {granted day}.
+        # H3 is three clauses (v1.12) and each reports under its OWN rule id: one
+        # shared id could only be rendered with one sentence, which would show the
+        # admin a WRONG reason for two of the three (§9 owns the sentences, but the
+        # rule id is what lets it pick the right one).
+        # H3(a): exactly one free weekday.
         free = [d for d in SOLVER_DAYS if day_counts[d] == 0]
-        domain = set(FREE_DAYS)
-        granted = grants.get(uid)
-        if granted is not None:
-            domain.add(granted)
-        if len(free) != 1 or free[0] not in domain:
-            found.append(Violation("H3", uid, free[0] if len(free) == 1 else None))
+        if len(free) != 1:
+            found.append(Violation("H3", uid))
+            continue
+        # H3(b): that day is inside the role domain ∪ {grant}.
+        if free[0] not in free_day_domain(user.role, uid, grants):
+            found.append(Violation("H3_ROLE_DOMAIN", uid, free[0]))
+            continue
+        # H3(c): no same-role worker rests on the same day. Reported against the
+        # moved worker and located on the shared day; the colliding partner is
+        # derivable from the week but deliberately not carried in the payload.
+        if any(
+            other != uid and role is user.role and free[0] in days
+            for other, (role, days) in free_days.items()
+        ):
+            found.append(Violation("H3_SHARED_FREE_DAY", uid, free[0]))
     return tuple(found)
+
+
+def _free_weekdays(
+    db: DbSession, rows: list[Assignment]
+) -> dict[int, tuple[UserRole, frozenset[Day]]]:
+    """Every CORE worker holding rows in the week, with their role and the weekdays
+    they work no slot on. Feeds the pairwise H3(c) check, which — unlike (a)/(b) —
+    cannot be decided from the affected worker's rows alone. The jolly is omitted
+    (H6: no free day to share)."""
+    worked: dict[int, set[Day]] = {}
+    for a in rows:
+        days = worked.setdefault(a.user_id, set())
+        if a.day in SOLVER_DAYS:
+            days.add(a.day)
+    out: dict[int, tuple[UserRole, frozenset[Day]]] = {}
+    for uid, days in worked.items():
+        user = db.get(User, uid)
+        if user is None or user.role is UserRole.JOLLY:
+            continue
+        out[uid] = (user.role, frozenset(d for d in SOLVER_DAYS if d not in days))
+    return out
 
 
 def _fan_out(db: DbSession, week: Week, spec: OverrideSpec, previous_user_id: int | None) -> None:

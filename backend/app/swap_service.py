@@ -20,9 +20,11 @@ same `validate_swap`, which checks, in order:
 - H2–H4 for BOTH parties against the hypothetical post-swap assignment set:
   no two roles in one (day, slot) (H2), no core worker doubled on a weekday
   (H4 — the jolly may double, H6), and each core party still holding exactly one
-  free weekday inside their legal H3 domain — Mon–Thu, extended by the week's
-  accepted §2.3 sacrifice grant (the v1.6 grant of record, read through the same
-  `accepted_sacrifice_grants` helper every solve uses).
+  free weekday (H3(a)) inside their legal H3(b) ROLE domain — {Mon, Tue} for a
+  spiaggino, {Tue, Wed} for a bagnino (v1.12), extended by the week's accepted
+  §2.3 sacrifice grant (the v1.6 grant of record, read through the same
+  `accepted_sacrifice_grants` helper every solve uses) — plus H3(c): no two
+  same-role workers sharing a free day.
 
 Application is atomic (§4): one transaction exchanges the two rows' holders,
 stamps `source = swap`, resolves the request, writes ONE audit row and fans out
@@ -34,6 +36,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from typing import Any, NamedTuple, Protocol
 
 from fastapi import HTTPException, status
@@ -61,7 +64,7 @@ from app.notifications import (
 from app.publish_service import write_solver_state
 from app.roles import can_hold
 from app.solve_service import accepted_sacrifice_grants
-from app.solver import FREE_DAYS, SOLVER_DAYS
+from app.solver import SOLVER_DAYS, free_day_domain
 from app.visibility import admin_recipients
 
 # §4: an unanswered request expires 48 h after creation.
@@ -81,7 +84,12 @@ ERROR_WEEK_NOT_LOCKED = "week_not_locked"  # 409: swaps are post-lock only (§3.
 ERROR_SWAP_ROLE_INVALID = "swap_role_invalid"  # 422: §4 role compatibility
 ERROR_SWAP_WEEKEND_BAGNINI_ONLY = "swap_weekend_bagnini_only"  # 422: H5
 ERROR_SWAP_H2_VIOLATION = "swap_h2_violation"  # 422
-ERROR_SWAP_H3_VIOLATION = "swap_h3_violation"  # 422
+# H3 is three clauses (v1.12) and each gets its own code: a single code could only
+# be rendered with one sentence, which would show the user a WRONG reason for two
+# of the three refusals (§9 keeps the sentences, but the code must let it pick).
+ERROR_SWAP_H3_VIOLATION = "swap_h3_violation"  # 422: (a) not exactly one free day
+ERROR_SWAP_H3_ROLE_DOMAIN = "swap_h3_role_domain"  # 422: (b) outside the role domain
+ERROR_SWAP_H3_SHARED_FREE_DAY = "swap_h3_shared_free_day"  # 422: (c) same-role pair shares
 ERROR_SWAP_H4_VIOLATION = "swap_h4_violation"  # 422
 
 
@@ -311,6 +319,13 @@ def _check_h2_h4(
 
     H3/H4 range over Mon–Fri only: the weekend is a template, never solved (H5),
     and its full-day workers legitimately hold two slots a day.
+
+    H3 is three clauses (v1.12) and all three are checked: (a) exactly one free
+    weekday, (b) inside the worker's ROLE domain, (c) no same-role pair sharing a
+    free day. (c) is *pairwise*, so unlike (a)/(b) it cannot be decided from a
+    party's own rows: a swap that moves a party's free day can collide with an
+    untouched same-role partner's. The free days of every core worker in the week
+    are therefore computed, and each party is checked against their partner.
     """
     rows = db.scalars(select(Assignment).where(Assignment.week_id == week.id)).all()
     holders: dict[int, int] = {a.id: a.user_id for a in rows}
@@ -319,6 +334,7 @@ def _check_h2_h4(
     holders[to_a.id] = from_a.user_id
 
     grants = accepted_sacrifice_grants(db, week)  # v1.6 grant of record (§2.1 H3)
+    free_days = _free_weekdays(db, rows, holders)
     for party in (requester, target):
         held = [a for a in rows if holders[a.id] == party.id]
         # H2: at most one role per (day, slot) — checked across the whole week,
@@ -332,14 +348,48 @@ def _check_h2_h4(
         day_counts = Counter(a.day for a in held if a.day in SOLVER_DAYS)
         if any(n > 1 for n in day_counts.values()):
             raise _invalid(ERROR_SWAP_H4_VIOLATION)
-        # H3: still exactly one free weekday, inside Mon–Thu ∪ {granted day}.
+        # H3(a): exactly one free weekday.
         free = [d for d in SOLVER_DAYS if day_counts[d] == 0]
-        domain = set(FREE_DAYS)
-        granted = grants.get(party.id)
-        if granted is not None:
-            domain.add(granted)
-        if len(free) != 1 or free[0] not in domain:
+        if len(free) != 1:
             raise _invalid(ERROR_SWAP_H3_VIOLATION)
+        # H3(b): that day is inside the role domain ∪ {grant}. The domain comes from
+        # the solver's `free_day_domain` — the single source of truth (§8) — never a
+        # local copy, so a post-lock swap can never accept a placement the solver
+        # itself would refuse (e.g. a bagnino free Monday).
+        if free[0] not in free_day_domain(party.role, party.id, grants):
+            raise _invalid(ERROR_SWAP_H3_ROLE_DOMAIN)
+        # H3(c): no same-role worker rests on the same day, so a role is never left
+        # to the jolly alone for a whole day. Checked against the whole week, since
+        # the colliding partner need not be a party to the swap.
+        if any(
+            uid != party.id and role is party.role and free[0] in days
+            for uid, (role, days) in free_days.items()
+        ):
+            raise _invalid(ERROR_SWAP_H3_SHARED_FREE_DAY)
+
+
+def _free_weekdays(
+    db: DbSession,
+    rows: Sequence[Assignment],
+    holders: Mapping[int, int],
+) -> dict[int, tuple[UserRole, frozenset[Day]]]:
+    """Every CORE worker in the week with their role and the weekdays they hold no
+    slot on, under the hypothetical `holders` mapping. Feeds the pairwise H3(c)
+    check; the jolly is omitted (H6 — no free day to share)."""
+    out: dict[int, tuple[UserRole, frozenset[Day]]] = {}
+    worked: dict[int, set[Day]] = {}
+    for a in rows:
+        uid = holders[a.id]
+        if a.day in SOLVER_DAYS:
+            worked.setdefault(uid, set()).add(a.day)
+        else:
+            worked.setdefault(uid, set())
+    for uid, days in worked.items():
+        user = db.get(User, uid)
+        if user is None or user.role is UserRole.JOLLY:
+            continue
+        out[uid] = (user.role, frozenset(d for d in SOLVER_DAYS if d not in days))
+    return out
 
 
 def _fan_out_accepted(db: DbSession, swap: SwapRequest, week: Week) -> None:

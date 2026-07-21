@@ -13,7 +13,7 @@ from app.solver.continuity import (
     compute_next_solver_state,
 )
 from app.solver.types import (
-    FREE_DAYS,
+    ROLE_FREE_DAYS,
     SOLVER_DAYS,
     ObjectiveBreakdown,
     PersonalConstraint,
@@ -30,11 +30,10 @@ from app.solver.types import (
 from app.solver.weekend import (
     WeekendAssignment,
     emit_weekend_template,
-    full_weekend_worker_ids,
 )
 
 __all__ = [
-    "FREE_DAYS",
+    "ROLE_FREE_DAYS",
     "SOLVER_DAYS",
     "ObjectiveBreakdown",
     "PersonalConstraint",
@@ -51,6 +50,5 @@ __all__ = [
     "compute_next_solver_state",
     "emit_weekend_template",
     "free_day_domain",
-    "full_weekend_worker_ids",
     "solve",
 ]

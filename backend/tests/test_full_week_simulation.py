@@ -67,13 +67,22 @@ def _submit(client: TestClient, monday: dt.date, day: str, slot: str, kind: str)
 
 
 def _submit_the_week(client: TestClient, monday: dt.date) -> None:
-    """The roster's soft rest preferences for the week (§3.1 submission window)."""
+    """The roster's soft rest preferences for the week (§3.1 submission window).
+
+    Every request is inside the requester's §2.1 H3(b) ROLE domain — spiaggini
+    {Mon, Tue}, bagnini {Tue, Wed} — so the set is jointly satisfiable and the
+    simulation tests the lifecycle rather than an unsatisfiable week. Amir asked
+    for Wednesday before v1.12; as a spiaggino he now cannot have it at any
+    strength, which made `soft_unmet == 0` unreachable by construction. That
+    silent-drop behaviour is real and is covered on its own below, rather than by
+    weakening this scenario's assertion.
+    """
     login(client, "francesco")
-    _submit(client, monday, "tue", "full_day", "soft")  # prefers Tuesday off
+    _submit(client, monday, "tue", "full_day", "soft")  # bagnino: prefers Tuesday off
     login(client, "amir")
-    _submit(client, monday, "wed", "full_day", "soft")  # prefers Wednesday off
+    _submit(client, monday, "tue", "full_day", "soft")  # spiaggino: prefers Tuesday off
     login(client, "pasha")
-    _submit(client, monday, "mon", "full_day", "soft")  # prefers Monday off
+    _submit(client, monday, "mon", "full_day", "soft")  # spiaggino: prefers Monday off
 
 
 def _assert_h1_weekday_coverage(assignments: list[dict]) -> None:
@@ -149,14 +158,15 @@ def test_full_week_real_sacrifice_propose_accept_resolve(
     """§2.3 end to end from a REAL `/admin/solve`, nothing seeded (Phase 3 gate).
 
     Pasha submits a hard full-day FRIDAY request. Friday is the one day H4 forces
-    worked that H3's default Mon–Thu domain cannot free (§2.3 corollary), so the
-    solve is INFEASIBLE and the §8 unsat core names him. The flow probes with a
-    Friday **sacrifice grant** (`Mon–Thu ∪ {Fri}`) plus the matching pin, finds it
-    feasible, and opens a PENDING proposal offering Friday. Pasha accepts over
-    HTTP; the week re-solves carrying the grant and publishes.
+    worked that his spiaggino role domain {Mon, Tue} cannot free (§2.3's
+    reachable-days table), so the solve is INFEASIBLE and the §8 unsat core names
+    him. The flow probes with a Friday **sacrifice grant** (`{Mon, Tue} ∪ {Fri}`)
+    plus the matching pin, finds it feasible, and opens a PENDING proposal offering
+    Friday. Pasha accepts over HTTP; the week re-solves carrying the grant and
+    publishes.
 
     The trade asserted here is exactly the one §2.3 defines: he gives up his
-    *weekday free-day placement* — he works all four Mon–Thu days — and his hard
+    *weekday free-day placement* — he works all four other weekdays — and his hard
     request is honored IN FULL, zero Friday slots, with the jolly covering the
     Friday slot he vacated. H7 is never downgraded to buy the resolution.
     """
@@ -202,7 +212,7 @@ def test_full_week_real_sacrifice_propose_accept_resolve(
 
     # H7 in full: ZERO Friday slots. This is the whole point of the trade.
     assert [a for a in mine if a["day"] == "fri"] == []
-    # The sacrifice: his free day IS Friday, so he works all four Mon–Thu days,
+    # The sacrifice: his free day IS Friday, so he works all four other weekdays,
     # one slot each (H4) — the weekday rest he would otherwise have taken is gone.
     for day in ("mon", "tue", "wed", "thu"):
         assert len([a for a in mine if a["day"] == day]) == 1, f"{day} must be worked"
@@ -280,6 +290,82 @@ def test_full_week_sacrifice_accepted_leads_to_publish(
     assert [a for a in mine if a["day"] == "fri"], "H3: Friday is always worked"
 
 
+# --- D. the v1.12 silent drop: a SOFT out-of-domain request -----------------
+
+
+def test_soft_out_of_domain_request_is_dropped_silently_with_no_proposal(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.1 H3(b) + §2.2 S1 (v1.12): a SOFT full-day request on a day outside the
+    requester's role domain is UNSATISFIABLE by construction — the free day cannot
+    move there without a §2.3 grant, and §2.3 issues grants only for HARD
+    constraints. So the week solves, the request comes back counted unmet, and
+    nothing else happens: no sacrifice proposal, no escalation, no notification.
+
+    A new consequence of the v1.12 domains, and one worth pinning precisely because
+    it is silent: before v1.12 a Wednesday request from a spiaggino was ordinary
+    and satisfiable. The contrast with the HARD version of the same request — which
+    makes the week INFEASIBLE and opens the §2.3 conversation — is asserted in the
+    same test so the two paths cannot drift into each other.
+    """
+    roster = create_full_roster(session)
+    monday = _future_monday()
+
+    # Amir is a spiaggino (domain {Mon, Tue}); Wednesday is outside it.
+    login(client, "amir")
+    _submit(client, monday, "wed", "full_day", "soft")
+
+    login(client, "mattia")
+    solve = client.post("/api/admin/solve", params={"week": monday.isoformat()})
+    assert solve.status_code == 200, solve.text
+    # The week still SOLVES — a soft request never blocks anything (§2.2).
+    assert solve.json()["status"] in ("optimal", "feasible")
+    # ... and the request is simply counted unmet.
+    assert solve.json()["objective"]["soft_unmet"] == 1
+
+    # Silent: §2.3 is a HARD-constraint flow, so nothing was offered or escalated.
+    assert session.scalars(select(SacrificeProposal)).all() == []
+    login(client, "amir")
+    events = {n["event_type"] for n in client.get("/api/notifications").json()}
+    assert not events & {"sacrifice_proposed", "sacrifice_resolved", EVENT_SACRIFICE_ESCALATED}
+
+    # His free day landed inside his role domain, and Wednesday is worked.
+    login(client, "mattia")
+    assert client.post("/api/admin/publish", params={"week": monday.isoformat()}).status_code == 200
+    grid = client.get("/api/schedule", params={"week": monday.isoformat()}).json()
+    mine = [a for a in grid["assignments"] if a["user_id"] == roster["amir"].id]
+    assert [a for a in mine if a["day"] == "wed"], "H3(b): a spiaggino always works Wednesday"
+    assert {a["day"] for a in mine} & {"mon", "tue"} != {"mon", "tue"}, (
+        "H3(a): exactly one of his two in-domain days is free"
+    )
+
+
+def test_the_same_request_submitted_hard_does_open_the_conversation(
+    client: TestClient, session: DbSession
+) -> None:
+    """The control for the silent drop above: SAME worker, SAME day, kind=HARD.
+    Wednesday is `reachable` for a spiaggino (§2.3 table), so the week is
+    INFEASIBLE, the probe carrying a Wednesday grant succeeds, and a proposal IS
+    opened. The difference between the two outcomes is the constraint's kind and
+    nothing else."""
+    roster = create_full_roster(session)
+    monday = _future_monday()
+
+    login(client, "amir")
+    _submit(client, monday, "wed", "full_day", "hard")
+
+    login(client, "mattia")
+    solve = client.post("/api/admin/solve", params={"week": monday.isoformat()})
+    assert solve.status_code == 200, solve.text
+    assert solve.json()["status"] == "infeasible"
+
+    proposals = session.scalars(select(SacrificeProposal)).all()
+    assert len(proposals) == 1
+    assert proposals[0].user_id == roster["amir"].id
+    assert proposals[0].proposed_free_day is Day.WED
+    assert proposals[0].status is SacrificeStatus.PENDING
+
+
 # --- C. infeasibility the extended probe cannot fix → admin escalation ------
 
 
@@ -317,7 +403,7 @@ def test_full_week_friday_conflict_with_infeasible_probe_ends_in_admin_escalatio
     assert solve.json()["blocking_constraints"], "§8: the core must name the conflict"
 
     # No proposal at all: the Friday-extended probe failed, so the branch never
-    # fired. (A Friday free day is LEGAL under a §2.3 grant, v1.4 — what is absent
+    # fired. (A Friday free day is LEGAL under a §2.3 grant — what is absent
     # here is the offer, not an "illegal" day.)
     assert session.scalars(select(SacrificeProposal)).all() == []
 
