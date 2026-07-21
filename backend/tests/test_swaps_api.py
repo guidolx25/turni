@@ -38,6 +38,7 @@ from app.models import (
     AuditLog,
     Notification,
     SacrificeProposal,
+    SolverState,
     SwapRequest,
     User,
     Week,
@@ -667,6 +668,61 @@ def test_weekend_bagnino_swap_is_allowed(client: TestClient, session: DbSession)
 
     session.expire_all()
     assert session.get(Assignment, mine.id).user_id == target.id
+
+
+def test_a_sunday_swap_re_seeds_next_weeks_alternation_boundary(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.2/§8: `solver_state` holds each worker's LAST WORKED SLOT — a fact
+    about what happened, not about what was planned. Publishing derives it from
+    the weekend rows; an H5 Sunday bagnino swap then MOVES those rows, and §2.2
+    names exactly this pair as next Monday's alternation seed ("Matteo exits
+    Sunday on PM, Francesco on AM"). If the boundary were still derived from
+    the ideal template, next week would be seeded from a Sunday that never
+    happened — and inverted for both of them at once."""
+    roster = create_full_roster(session)
+    week = _published_week(session, roster, _future_monday())
+    rows = _rows(session, week)
+    sunday_bagnini = [a for a in rows if a.day is Day.SUN and a.role is AssignmentRole.BAGNINO]
+    assert len({a.user_id for a in sunday_bagnini}) == 2, "H5 puts two bagnini on Sunday"
+    mine, theirs = sorted(sunday_bagnini, key=lambda a: a.slot.value)
+    requester = session.get(User, mine.user_id)
+    target = session.get(User, theirs.user_id)
+    assert requester is not None and target is not None
+
+    before = {
+        state.user_id: state.last_worked_slot
+        for state in session.scalars(select(SolverState)).all()
+    }
+    assert before[requester.id] is not before[target.id], (
+        "precondition: the two Sunday bagnini exit on opposite slots"
+    )
+
+    login(client, requester.username)
+    code, body = _create(client, target, mine, theirs)
+    assert code == 201, body
+    login(client, target.username)
+    assert client.post(f"/swaps/{body['id']}/accept").status_code == 200
+
+    session.expire_all()
+    after = {
+        state.user_id: state.last_worked_slot
+        for state in session.scalars(select(SolverState)).all()
+    }
+    # The two swapped their Sunday slots, so their boundaries must have swapped
+    # with them — read back from the rows, not from the template.
+    assert after[requester.id] == before[target.id]
+    assert after[target.id] == before[requester.id]
+    # And the stored boundary agrees with the schedule as it now stands.
+    for party in (requester, target):
+        sunday_row = next(
+            a
+            for a in _rows(session, week)
+            if a.day is Day.SUN and a.user_id == party.id and a.role is AssignmentRole.BAGNINO
+        )
+        assert after[party.id] == sunday_row.slot, (
+            "solver_state must describe the Sunday that actually happened"
+        )
 
 
 def test_weekend_spiaggino_swap_is_refused(client: TestClient, session: DbSession) -> None:

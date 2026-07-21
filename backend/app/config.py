@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     # spec §11: SQLite on a persistent volume in production; a local file in dev.
     database_url: str = "sqlite:///./turni.db"
     # spec §4: ships false in v1; the state machine exists behind it.
+    #
+    # DO NOT enable in v1. §13 defers the admin-approval SURFACE, so `pending_admin`
+    # is reachable but has no exit: turning this on parks every accepted swap
+    # permanently — the 48 h expiry only sweeps `pending`, and no endpoint approves.
+    # The flag is here so the state machine could be built and tested (§4), not so
+    # it could be switched on. `app.main` warns loudly at startup if it is.
     require_admin_approval: bool = False
     # spec §3: Europe/Rome for ALL scheduling logic. Store UTC, convert at edges.
     tz: str = "Europe/Rome"

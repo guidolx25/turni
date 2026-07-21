@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.config import settings
 from app.routers import (
     admin,
     auth,
@@ -26,6 +27,8 @@ from app.scheduler import build_scheduler
 # (not an f-string-shaped format). Deferred to the §11 work.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -34,6 +37,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     Started here, not at import, so importing the app (and the test suite) never
     spins up a background thread — only a real server run does.
     """
+    if settings.require_admin_approval:
+        # §4 builds the pending_admin state; §13 defers the approval surface, so
+        # nothing can move a swap out of it and the 48 h sweep only touches
+        # `pending`. Enabling this strands every accepted swap. Loud, not fatal:
+        # refusing to boot would be a worse failure for an operator who set it
+        # by accident, and the swaps still exist to be released once the Phase 6
+        # approval endpoint lands.
+        logger.error(
+            "REQUIRE_ADMIN_APPROVAL is ON, but the approval endpoint is deferred (spec §13): "
+            "accepted swaps will park in `pending_admin` with no way out. Unset it unless you "
+            "are deliberately freezing swaps."
+        )
     scheduler = build_scheduler()
     scheduler.start()
     try:

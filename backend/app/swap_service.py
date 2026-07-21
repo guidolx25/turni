@@ -58,6 +58,7 @@ from app.notifications import (
     EVENT_SWAP_REQUESTED,
     notify,
 )
+from app.publish_service import write_solver_state
 from app.solve_service import accepted_sacrifice_grants
 from app.solver import FREE_DAYS, SOLVER_DAYS
 from app.visibility import admin_recipients
@@ -175,6 +176,16 @@ def accept_swap(db: DbSession, swap: SwapRequest, actor: User) -> SwapRequest:
     to_a.source = AssignmentSource.SWAP
     swap.status = SwapStatus.APPLIED
     swap.resolved_at = utcnow()
+    if from_a.day in _WEEKEND_DAYS or to_a.day in _WEEKEND_DAYS:
+        # §2.2: `solver_state` records each worker's LAST WORKED SLOT, and H5
+        # lets this swap trade Sunday AM for Sunday PM between the two weekend
+        # bagnini — the very pair §2.2 names as next Monday's alternation seed.
+        # Publishing derived the boundary from these rows; the rows just moved,
+        # so re-derive it or next week's S2 term is seeded from a Sunday that
+        # did not happen. Same transaction: the schedule and the boundary it
+        # implies are never separately true.
+        db.flush()  # the exchange must be visible to the re-read below
+        write_solver_state(db, week)
     audit.record(
         db,
         actor,

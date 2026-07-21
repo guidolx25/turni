@@ -17,21 +17,26 @@ for the step; §3.3 makes publish distinct from solve (an INFEASIBLE solve parks
 
 from __future__ import annotations
 
+import datetime as dt
+
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DbSession
 
 from app import audit
 from app.db import utcnow
-from app.enums import AssignmentSource, WeekStatus
+from app.enums import AssignmentSource, Day, WeekStatus
 from app.models import Assignment, SolverState, User, Week
 from app.notifications import EVENT_SCHEDULE_PUBLISHED, notify
-from app.solve_service import build_roster
-from app.solver import compute_next_solver_state, emit_weekend_template
+from app.solver import WeekendAssignment, compute_next_solver_state
 
 # Machine codes (§9 keeps user-visible strings in the dictionaries).
 ERROR_NOT_SOLVED = "week_not_solved"
 ERROR_ALREADY_LOCKED = "week_already_locked"
+
+_WEEKEND_DAYS = (Day.SAT, Day.SUN)
+# Calendar offset of each day from the week's Monday (§6 weeks.monday_date).
+_DAY_OFFSET: dict[Day, int] = {day: index for index, day in enumerate(Day)}
 
 
 def publish_week(db: DbSession, week: Week, actor: User | None) -> Week:
@@ -58,7 +63,7 @@ def publish_week(db: DbSession, week: Week, actor: User | None) -> Week:
     week.status = WeekStatus.LOCKED
     week.locked_at = utcnow()
 
-    _write_solver_state(db, week)
+    write_solver_state(db, week)
     _fan_out_published(db, week)
     audit.record(
         db, actor, audit.ACTION_PUBLISH, "week", week.id, {"monday": week.monday_date.isoformat()}
@@ -76,14 +81,38 @@ def _has_solver_rows(db: DbSession, week: Week) -> bool:
     return bool(count)
 
 
-def _write_solver_state(db: DbSession, week: Week) -> None:
-    """Discharge the Phase 2 carry-forward: derive each worker's Sunday→Monday
-    boundary from the fixed H5 template and upsert it into `solver_state` (§8).
+def write_solver_state(db: DbSession, week: Week) -> None:
+    """Derive each worker's Sunday→Monday boundary from the week's PERSISTED
+    weekend rows and upsert it into `solver_state` (§2.2, §8).
+
+    Read from the rows, not from `emit_weekend_template`: §2.2 states the
+    invariant as a fact about reality — "each worker's last worked slot is
+    persisted in `solver_state`" — and after publish that reality can still
+    move. §2.1 H5 lets a post-lock bagnino↔bagnino swap trade Sunday AM for
+    Sunday PM, and §5 lets an admin override a locked slot. Deriving from the
+    ideal template would leave the stored boundary describing a Sunday that no
+    longer happened, and §2.2 names precisely these two workers as the ones
+    Monday's alternation is seeded from — so the error would land on the term
+    it most affects.
+
+    Idempotent, so any caller that changes weekend rows can simply re-run it.
 
     The full-weekend workers get a NULL `last_worked_slot` (the FULL_DAY boundary
-    the single am/pm column cannot hold); the jolly, absent from the template's
-    Sunday rows, gets no row at all — no boundary term next week (§2.2)."""
-    weekend = emit_weekend_template(build_roster(db), week.monday_date)
+    the single am/pm column cannot hold); the jolly, absent from Sunday, gets no
+    row at all — no boundary term next week (§2.2)."""
+    weekend = tuple(
+        WeekendAssignment(
+            date=week.monday_date + dt.timedelta(days=_DAY_OFFSET[row.day]),
+            slot=row.slot,
+            role=row.role,
+            worker_id=row.user_id,
+        )
+        for row in db.scalars(
+            select(Assignment).where(
+                Assignment.week_id == week.id, Assignment.day.in_(_WEEKEND_DAYS)
+            )
+        ).all()
+    )
     for cont in compute_next_solver_state(weekend):
         st = db.get(SolverState, cont.worker_id)
         if st is None:
