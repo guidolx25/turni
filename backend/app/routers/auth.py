@@ -55,7 +55,11 @@ ERROR_RATE_LIMITED = "rate_limited"
 ERROR_INVALID_CURRENT_PASSWORD = "invalid_current_password"
 ERROR_CURRENT_PASSWORD_REQUIRED = "current_password_required"
 ERROR_NEW_PASSWORD_REQUIRED = "new_password_required"
-ERROR_INVALID_EMAIL = "invalid_email"
+ERROR_NEW_PASSWORD_TOO_SHORT = "new_password_too_short"
+
+# A floor the spec does not set: enough that this endpoint cannot be used to
+# weaken an account to a one-character password.
+MIN_PASSWORD_LENGTH = 8
 
 
 def _client_ip(request: Request) -> str:
@@ -167,38 +171,6 @@ def _current_token(cookie: str | None) -> str | None:
     return unsign_token(cookie) if cookie else None
 
 
-def _normalized_email(raw: str | None) -> str | None:
-    """Validate and normalize an address for `users.email` (§6, nullable).
-
-    Explicit `null` — and an empty string, which is what an emptied form field
-    sends — clears the address. §10's email channel then has nowhere to send and
-    silently skips, which is the intended way to be reachable in-app only.
-
-    The check is deliberately shallow (one `@`, non-empty both sides, a dot in
-    the domain, no whitespace): it catches typos without pretending to implement
-    RFC 5322. A well-formed address that does not exist fails at Resend, where it
-    is logged and dropped rather than breaking a domain event (§10).
-    """
-    if raw is None:
-        return None
-    value = raw.strip()
-    if not value:
-        return None
-    local, separator, domain = value.partition("@")
-    malformed = (
-        not separator
-        or not local
-        or not domain
-        or "." not in domain
-        or any(char.isspace() for char in value)
-    )
-    if malformed:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=ERROR_INVALID_EMAIL
-        )
-    return value
-
-
 def _apply_password_change(db: DbDep, user: User, body: MeSettingsIn, cookie: str | None) -> None:
     """§7 password change: verify the current password, rehash, revoke elsewhere.
 
@@ -226,6 +198,14 @@ def _apply_password_change(db: DbDep, user: User, body: MeSettingsIn, cookie: st
     if not verify_password(user.password_hash, body.current_password):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_INVALID_CURRENT_PASSWORD
+        )
+    # Checked here rather than as a Field constraint so the failure is a code the
+    # §9 dictionaries can render, not pydantic's error list (which the frontend
+    # can only degrade to "something went wrong").
+    if len(body.new_password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=ERROR_NEW_PASSWORD_TOO_SHORT,
         )
 
     user.password_hash = hash_password(body.new_password)
@@ -262,11 +242,6 @@ def update_settings(
         user.language = body.language
     if body.email_notifications is not None:
         user.email_notifications = body.email_notifications
-    # `model_fields_set` and not `is not None`: an explicit null clears the
-    # address, which is a different request from omitting the field.
-    if "email" in body.model_fields_set:
-        user.email = _normalized_email(body.email)
-
     _apply_password_change(db, user, body, cookie)
 
     db.add(user)

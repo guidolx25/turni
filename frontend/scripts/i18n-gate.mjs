@@ -23,6 +23,14 @@
  * rule; the uncovered case is a short word built in a variable and rendered
  * through an expression. Multi-word copy and anything ≥ 12 chars is covered.
  *
+ * That is the ONLY gap. Three others were found by review and closed rather
+ * than documented: interpolated templates (the literal parts of a
+ * `TemplateExpression` are Head/Middle/Tail, not StringLiterals), all-lowercase
+ * prose (the old CSS heuristic accepted "nessun turno pubblicato" as a class
+ * list), and JSX attributes (the ESLint rule include-lists six visible ones, so
+ * this gate exclude-lists the non-visible ones instead — opposite polarity, and
+ * the safe direction to fail).
+ *
  * Usage: node scripts/i18n-gate.mjs  →  exit 1 on any finding.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -38,9 +46,13 @@ const SRC = join(ROOT, 'src')
 const SKIP_FILES = [/src[/\\]i18n[/\\](it|en)\.ts$/, /\.test\.tsx?$/, /src[/\\]test[/\\]/]
 
 /**
- * JSX attributes that never reach a human eye. Anything NOT in this list is
- * treated as potentially visible — a new visible attribute is a finding until
- * someone consciously adds it here, which is the safe direction to fail.
+ * JSX attributes that never reach a human eye.
+ *
+ * The ESLint rule polices attributes with an INCLUDE-list of six visible ones,
+ * so a newly-visible attribute (`aria-valuetext`, `aria-roledescription`,
+ * `summary`, `download`) is not a finding there. This gate closes that polarity
+ * gap: any JSX attribute NOT named here is checked, so an unfamiliar visible
+ * attribute fails until someone consciously classifies it.
  */
 const NON_VISIBLE_ATTRS = new Set([
   'className',
@@ -106,9 +118,16 @@ function looksLikeProse(text) {
   if (!/\s/.test(trimmed) && /^[a-z0-9]+([._-][a-z0-9]+)*$/i.test(trimmed)) return false
   // A URL, path, or media/mime-ish value.
   if (/^([a-z]+:)?\/\//.test(trimmed) || trimmed.startsWith('/')) return false
-  // Tailwind/CSS: every token is class-shaped (no capitals, no sentence punctuation).
+  // Tailwind/CSS: every token is class-shaped. A CSS token carries a structural
+  // character (`-`, `:`, `/`, `[`, `.`, …); a lowercase WORD does not — so
+  // "nessun turno pubblicato" is prose while "flex items-center gap-2" is not.
+  // Requiring that distinction, rather than just "all lowercase", is what stops
+  // an entire class of untranslated copy from being waved through.
   const tokens = trimmed.split(/\s+/)
-  const classLike = tokens.every((tok) => /^[a-z0-9[\]()<>:._/\\%#-]+$/.test(tok))
+  const cssToken = /^[a-z0-9[\]()<>:._/\\%#-]+$/
+  const structural = /[[\]():/\\%#.-]/
+  const classLike =
+    tokens.every((tok) => cssToken.test(tok)) && tokens.some((tok) => structural.test(tok))
   if (classLike) return false
   // Intl/date format patterns and single capitalised identifiers.
   if (/^[A-Za-z]+$/.test(trimmed) && trimmed.length < 12) return false
@@ -130,8 +149,12 @@ function isCheckedPosition(node) {
     case ts.SyntaxKind.PropertyAssignment:
       // Object KEYS are identifiers; values still count.
       return parent.name !== node
-    case ts.SyntaxKind.JsxAttribute:
-      return false // the ESLint rule owns JSX attributes
+    case ts.SyntaxKind.JsxAttribute: {
+      // Not "the linter owns this": its include-list only covers six attributes,
+      // so anything outside NON_VISIBLE_ATTRS is checked here instead.
+      const attrName = ts.isIdentifier(parent.name) ? parent.name.text : parent.name.getText()
+      return !NON_VISIBLE_ATTRS.has(attrName)
+    }
     case ts.SyntaxKind.CallExpression: {
       const callee = parent.expression
       const name = ts.isIdentifier(callee)
@@ -154,14 +177,30 @@ for (const file of walkFiles(SRC)) {
   const lines = text.split('\n')
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TSX)
 
+  const report = (node, text) => {
+    const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf))
+    const own = lines[line] ?? ''
+    const above = lines[line - 1] ?? ''
+    if (!/i18n-gate-ignore/.test(own) && !/i18n-gate-ignore/.test(above)) {
+      findings.push({ file: rel, line: line + 1, text })
+    }
+  }
+
   const visit = (node) => {
     const isString = ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
     if (isString && isCheckedPosition(node) && looksLikeProse(node.text)) {
-      const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf))
-      const own = lines[line] ?? ''
-      const above = lines[line - 1] ?? ''
-      if (!/i18n-gate-ignore/.test(own) && !/i18n-gate-ignore/.test(above)) {
-        findings.push({ file: rel, line: line + 1, text: node.text })
+      report(node, node.text)
+    }
+    // An INTERPOLATED template (`Ciao ${name}, il turno è cambiato`) is a
+    // TemplateExpression whose literal parts are Head/Middle/Tail nodes — none
+    // of them a StringLiteral. Interpolated copy is exactly the shape prose
+    // takes once it needs a value in it, so checking only plain literals would
+    // miss the most likely hardcoded sentence in the codebase.
+    if (ts.isTemplateExpression(node) && isCheckedPosition(node)) {
+      const parts = [node.head, ...node.templateSpans.map((span) => span.literal)]
+      const prose = parts.map((part) => part.text).filter((text) => looksLikeProse(text))
+      if (prose.length > 0) {
+        report(node, prose.join(' … '))
       }
     }
     // JSX text nodes are the ESLint rule's job, but a bare {'...'} expression

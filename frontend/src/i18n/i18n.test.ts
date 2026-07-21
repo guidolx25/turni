@@ -26,3 +26,23 @@ test('placeholders match between languages', () => {
     expect(placeholders(en[key]), key).toEqual(placeholders(itDict[key]))
   }
 })
+
+test('the document language follows the active language (§9)', async () => {
+  // index.html ships a static `lang`; a bilingual app that always claims one
+  // language mis-cues screen readers and browser translation. This closes the
+  // Phase 0 carry-forward, so it needs a test that fails if it is undone.
+  const { LanguageProvider, useLanguage } = await import('./index')
+  const { renderHook, act } = await import('@testing-library/react')
+
+  const { result } = renderHook(() => useLanguage(), { wrapper: LanguageProvider })
+
+  act(() => {
+    result.current.setLanguage('en', { sync: false })
+  })
+  expect(document.documentElement.lang).toBe('en')
+
+  act(() => {
+    result.current.setLanguage('it', { sync: false })
+  })
+  expect(document.documentElement.lang).toBe('it')
+})

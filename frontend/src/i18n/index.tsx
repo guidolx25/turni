@@ -14,7 +14,15 @@
  * *adopting* the server's stored value, where echoing it back is a pointless
  * round-trip.
  */
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react'
 
 import { meApi } from '../api/endpoints'
 import { en } from './en'
@@ -85,6 +93,14 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       })
     }
   }, [])
+
+  // §9: the document's own language must follow the user's. index.html ships a
+  // static `lang`, and a bilingual app that always claims one language mis-cues
+  // screen-reader pronunciation and offers browser translation of text already
+  // in the reader's language. This is the only place that knows the answer.
+  useEffect(() => {
+    document.documentElement.lang = language
+  }, [language])
 
   const t = useCallback<Translate>(
     (key, params) => {

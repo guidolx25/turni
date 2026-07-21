@@ -60,20 +60,23 @@ class MeSettingsIn(BaseModel):
 
     language: Language | None = None
     email_notifications: bool | None = None
-    # Bounded by the §6 column width. Not `EmailStr`: that pulls in
-    # `email-validator` for a check the transport performs anyway — a malformed
-    # address fails at Resend, is logged, and never breaks a domain event (§10).
-    # The light shape check in the handler catches typos, not RFC edge cases.
-    email: str | None = Field(default=None, max_length=255)
+    # `email` is deliberately ABSENT. §7 scopes this endpoint to "language,
+    # email_notifications, password change", and §5 puts account management on
+    # root's `/root/users`. Accepting it here would also contradict what the
+    # Settings view tells the user (the address is managed by whoever created
+    # the account) — and it decides where §10 Channel 2 mail is delivered.
+    #
     # A password change is `current_password` + `new_password` together (§7): the
     # session cookie proves who you are, the current password proves you are still
     # at the keyboard, which is what makes a stolen cookie unable to lock the owner
     # out of their own account.
     current_password: str | None = Field(default=None, min_length=1, max_length=256)
-    # Minimum length is a floor the spec does not set; 8 is chosen so the endpoint
-    # cannot be used to weaken an account to a one-character password. Max mirrors
-    # LoginIn so argon2 never sees an unbounded body.
-    new_password: str | None = Field(default=None, min_length=8, max_length=256)
+    # Max mirrors LoginIn so argon2 never sees an unbounded body. The MINIMUM is
+    # enforced in the handler, not here: a Field constraint fails as a 422 whose
+    # `detail` is pydantic's error LIST, which the frontend cannot map to a
+    # dictionary key — so the user would read "something went wrong" instead of
+    # "your password is too short" (§9).
+    new_password: str | None = Field(default=None, max_length=256)
 
 
 class UserOut(BaseModel):

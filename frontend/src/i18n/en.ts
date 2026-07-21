@@ -226,6 +226,12 @@ export const en = {
   'errors.swap_week_mismatch': 'The two shifts belong to different weeks.',
   'errors.swap_self': 'You cannot swap a shift with yourself.',
   'errors.feed_not_found': 'Invalid calendar address.',
-  'errors.invalid_password': 'Your current password is not correct.',
-  'errors.password_too_short': 'The new password is too short.',
+  // These four are exactly what PATCH /me/settings can return (§7). They were
+  // wrong once — the dictionary named codes the backend never sends, so a
+  // mistyped password read as a generic failure while the right sentence sat
+  // unused. Keep them in step with app/routers/auth.py.
+  'errors.invalid_current_password': 'Your current password is not correct.',
+  'errors.current_password_required': 'Enter your current password to change it.',
+  'errors.new_password_required': 'Enter the new password.',
+  'errors.new_password_too_short': 'The new password must be at least 8 characters.',
 } satisfies Record<TranslationKey, string>

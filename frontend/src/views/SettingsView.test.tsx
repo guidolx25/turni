@@ -114,10 +114,14 @@ test('mismatched new passwords are refused client-side, before any request', asy
   expect(calls.some((c) => c.key === 'PATCH /me/settings')).toBe(false)
 })
 
+// The status and code below are the ones `PATCH /me/settings` really returns
+// (backend `app/routers/auth.py`). An earlier version of this test invented both,
+// so it passed while a real mistyped password fell through to the generic
+// message — a green test confirming its own fiction.
 test('a password change posts both fields and surfaces the server error code', async () => {
   const { calls } = stubFetch({
     'GET /me': { json: me },
-    'PATCH /me/settings': { status: 400, json: { detail: 'invalid_password' } },
+    'PATCH /me/settings': { status: 403, json: { detail: 'invalid_current_password' } },
   })
 
   renderWithProviders(<SettingsView />)
@@ -133,7 +137,7 @@ test('a password change posts both fields and surfaces the server error code', a
   })
   fireEvent.click(screen.getByRole('button', { name: itDict['settings.password.submit'] }))
 
-  expect(await screen.findByText(itDict['errors.invalid_password'])).toBeInTheDocument()
+  expect(await screen.findByText(itDict['errors.invalid_current_password'])).toBeInTheDocument()
   const patch = calls.find((c) => c.key === 'PATCH /me/settings')
   expect(patch?.body).toEqual({ current_password: 'wrong', new_password: 'new-secret' })
 })

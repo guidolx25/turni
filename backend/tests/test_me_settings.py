@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session as DbSession
 from app.enums import Language
 from app.models import AuditLog, User
 from app.models import Session as SessionRow
+from app.security import verify_password
 from tests.factories import PASSWORD, create_root, create_user, create_worker
 
 # Phase of origin (project conventions: gate runs selectable per phase).
@@ -43,14 +44,13 @@ def test_patch_updates_language_and_email_preferences(
 
     response = client.patch(
         "/me/settings",
-        json={"language": "en", "email_notifications": False, "email": "pasha@example.com"},
+        json={"language": "en", "email_notifications": False},
     )
 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["language"] == "en"
     assert body["email_notifications"] is False
-    assert body["email"] == "pasha@example.com"
     session.refresh(user)
     assert user.language is Language.EN
 
@@ -67,27 +67,46 @@ def test_patch_is_partial(session: DbSession, client: TestClient) -> None:
     assert response.json()["language"] == "en"
 
 
-def test_explicit_null_clears_the_email(session: DbSession, client: TestClient) -> None:
-    """Absent means "unchanged"; explicit null means "remove my address"."""
+def test_the_address_itself_is_not_settable_here(session: DbSession, client: TestClient) -> None:
+    """§7 scopes this endpoint to "language, email_notifications, password change".
+
+    The address decides where §10 Channel 2 mail is delivered, and §5 puts
+    account management on root's `/root/users` — so it is not the holder's to
+    change here. Structural, not a check: `MeSettingsIn` has no `email` field and
+    forbids extras, so the request cannot even express it.
+    """
     user = create_user(session, "pasha", email="pasha@example.com")
     login(client, user.username)
 
-    response = client.patch("/me/settings", json={"email": None})
+    response = client.patch("/me/settings", json={"email": "attacker@example.com"})
 
-    assert response.status_code == 200
-    assert response.json()["email"] is None
+    assert response.status_code == 422
     session.refresh(user)
-    assert user.email is None
+    assert user.email == "pasha@example.com", "the address must be untouched"
 
 
-def test_malformed_email_is_rejected(session: DbSession, client: TestClient) -> None:
+def test_a_too_short_new_password_is_refused_with_a_renderable_code(
+    session: DbSession, client: TestClient
+) -> None:
+    """§9: the failure must be a CODE the dictionaries can render.
+
+    A pydantic `min_length` would answer 422 with an error *list*, which the
+    frontend can only degrade to "something went wrong" — so the length floor is
+    enforced in the handler and named like every other error.
+    """
     user = create_worker(session)
     login(client, user.username)
 
-    response = client.patch("/me/settings", json={"email": "not-an-address"})
+    response = client.patch(
+        "/me/settings",
+        json={"current_password": PASSWORD, "new_password": "short"},
+    )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "invalid_email"
+    assert response.json()["detail"] == "new_password_too_short"
+    # The old password still works: a refused change changes nothing.
+    session.refresh(user)
+    assert verify_password(user.password_hash, PASSWORD)
 
 
 def test_invalid_language_is_rejected(session: DbSession, client: TestClient) -> None:

@@ -1,6 +1,6 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.7 (2026-07-21) · **Status:** Approved for build
+**Version:** 1.8 (2026-07-21) · **Status:** Approved for build
 **v1.5:** §6 `sacrifice_proposals.conflict_note` (prose) → `conflict` (structured
 §8 unsat core, `[{worker_id, day, slot}]`), so conflicts localize at render time (§9).
 **v1.6:** the accepted `sacrifice_proposals` row is the §2.1 H3 **grant of record** —
@@ -9,6 +9,8 @@ every solve of a week carries the grants from its accepted proposals; §6 adds
 **v1.7:** §6 `users` gains `ics_token UNIQUE` — the §7 `/export/ics` bearer
 credential: per-user, random, regenerable (revocation is per-user, never a
 SECRET_KEY rotation); §11 gains the ICS slot hours as deploy-time config.
+**v1.8:** §7 lists `POST /me/ics-token` (the regeneration §6 v1.7 already
+mandated) and states that `/me/settings` excludes the email address.
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -196,6 +198,13 @@ solver_state(user_id PK, last_worked_slot ENUM(am,pm), last_worked_date)
 ```
 POST   /auth/login            POST /auth/logout           GET /me
 PATCH  /me/settings           (language, email_notifications, password change)
+POST   /me/ics-token          (regenerate the caller's own feed credential, v1.7)
+
+-- /me/settings is scoped to the caller's own PREFERENCES. `email` is not among
+-- them: the address decides where §10 Channel 2 mail is delivered, and §5 puts
+-- account management on root's /root/users.
+-- /me/ics-token is the revocation half of §6's ics_token: "revocation is a
+-- per-user regeneration". Body is empty; the new token comes back on /me.
 
 -- /me carries the caller's own §5 capabilities as derived booleans, so the
 -- frontend knows which panels to render. They are derived from the same matrix

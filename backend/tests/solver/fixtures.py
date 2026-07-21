@@ -39,7 +39,7 @@ CORE_IDS: frozenset[int] = frozenset({MATTEO, FRANCESCO, PASHA, AMIR})
 BAGNINO_CORE_IDS: frozenset[int] = frozenset({MATTEO, FRANCESCO})
 SPIAGGINO_CORE_IDS: frozenset[int] = frozenset({PASHA, AMIR})
 
-# The photographed golden week (§8; CLAUDE reproduces 2026-07-13). A Monday.
+# The photographed golden week (§8 golden test; project conventions). A Monday.
 WEEK_MONDAY: dt.date = dt.date(2026, 7, 13)
 
 # Production weights (§2.2) — imported, never hardcoded, so the tier-ordering

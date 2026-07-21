@@ -227,8 +227,14 @@ export const it = {
   'errors.swap_week_mismatch': 'I due turni appartengono a settimane diverse.',
   'errors.swap_self': 'Non puoi scambiare un turno con te stesso.',
   'errors.feed_not_found': 'Indirizzo del calendario non valido.',
-  'errors.invalid_password': 'La password attuale non è corretta.',
-  'errors.password_too_short': 'La nuova password è troppo corta.',
+  // These four are exactly what PATCH /me/settings can return (§7). They were
+  // wrong once — the dictionary named codes the backend never sends, so a
+  // mistyped password read as a generic failure while the right sentence sat
+  // unused. Keep them in step with app/routers/auth.py.
+  'errors.invalid_current_password': 'La password attuale non è corretta.',
+  'errors.current_password_required': 'Inserisci la password attuale per cambiarla.',
+  'errors.new_password_required': 'Inserisci la nuova password.',
+  'errors.new_password_too_short': 'La nuova password deve avere almeno 8 caratteri.',
 } as const
 
 export type TranslationKey = keyof typeof it
