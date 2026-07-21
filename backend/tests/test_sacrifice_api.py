@@ -331,9 +331,7 @@ def test_unresolvable_conflict_escalates_without_a_proposal(
 # --- §2.3's two SYSTEMATIC escalations (v1.12) ------------------------------
 
 
-def _assert_escalated_without_a_proposal(
-    session: DbSession, roster: dict, days: set[str]
-) -> None:
+def _assert_escalated_without_a_proposal(session: DbSession, roster: dict, days: set[str]) -> None:
     """The shared assertion of both cases below: no proposal row exists at all,
     the workers are told nothing, and the visible admin holds the conflict.
 
