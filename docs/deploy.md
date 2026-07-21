@@ -37,7 +37,7 @@ Set as plain env:
 | `TZ` | `Europe/Rome` |
 | `RESEND_FROM` | A verified sender on your Resend domain |
 | `FORWARDED_ALLOW_IPS` | **The proxy's address — never `*`.** See below |
-| `ICS_AM_START` / `ICS_AM_END` / `ICS_PM_START` / `ICS_PM_END` | The establishment's real opening hours, `HH:MM` Europe/Rome. **The defaults (09:00–14:00 / 14:00–19:00) are placeholders** and are what appears in every worker's phone calendar |
+| `ICS_AM_START` / `ICS_AM_END` / `ICS_PM_START` / `ICS_PM_END` | Only if the hours change. The defaults are the real ones — AM `08:00`–`14:00`, PM `14:00`–`20:00` Europe/Rome — so you can leave these unset |
 
 ### `FORWARDED_ALLOW_IPS` — read this one
 

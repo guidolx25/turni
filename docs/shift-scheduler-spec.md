@@ -1,6 +1,6 @@
 # Turni — Shift Scheduler Specification
 
-**Version:** 1.9 (2026-07-21) · **Status:** Approved for build
+**Version:** 1.10 (2026-07-21) · **Status:** Approved for build
 **v1.5:** §6 `sacrifice_proposals.conflict_note` (prose) → `conflict` (structured
 §8 unsat core, `[{worker_id, day, slot}]`), so conflicts localize at render time (§9).
 **v1.6:** the accepted `sacrifice_proposals` row is the §2.1 H3 **grant of record** —
@@ -14,6 +14,8 @@ mandated) and states that `/me/settings` excludes the email address.
 **v1.9:** §11 states the host REQUIREMENTS (Dockerfile, persistent volume, a
 single never-autoscaled instance, secrets, `/healthz`, a pinnable proxy peer)
 instead of naming vendors — the host is a deployment decision, not a design one.
+**v1.10:** §11's ICS slot hours are the establishment's real ones — AM 08:00–14:00,
+PM 14:00–20:00 (user-supplied) — replacing the v1.7 placeholders.
 **Source of truth for this build. Any deviation requires updating this document first.**
 
 ---
@@ -306,7 +308,7 @@ notify(user, event_type, payload)  # fans out to every enabled channel
   5. an HTTP health check against `/healthz`;
   6. a known, stable **proxy peer address**, so `--forwarded-allow-ips` can be pinned to it. A wildcard would let any client forge `X-Forwarded-For` and defeat §7's per-IP login limit, so this must be verified on the chosen host rather than assumed.
 - Config via env: `SECRET_KEY`, `RESEND_API_KEY`, `REQUIRE_ADMIN_APPROVAL`, `TZ=Europe/Rome`, weight constants, and the ICS slot hours `ICS_AM_START` / `ICS_AM_END` / `ICS_PM_START` / `ICS_PM_END` (v1.7).
-  - **ICS slot hours (v1.7).** The domain model knows only `AM`/`PM` (§1); a calendar event needs concrete times. They are deploy-time config, as Europe/Rome wall clock, converted to UTC at the edge — defaults `09:00–14:00` and `14:00–19:00`. These defaults are a **placeholder for the establishment's real opening hours** and carry no other meaning: nothing in §2 or §8 reads them, and changing them moves only what a subscribed calendar displays.
+  - **ICS slot hours (v1.7; real values v1.10).** The domain model knows only `AM`/`PM` (§1); a calendar event needs concrete times. They are deploy-time config, as Europe/Rome wall clock, converted to UTC at the edge. The establishment's actual hours are **AM `08:00–14:00`, PM `14:00–20:00`**, and those are the defaults. Nothing in §2 or §8 reads them — changing them moves only what a subscribed calendar displays — but they are what every worker's phone shows, so they are the real hours and not a placeholder.
 - Health endpoint `/healthz`; structured logs; solver runs logged with duration + objective values.
 
 ---
