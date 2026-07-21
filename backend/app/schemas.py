@@ -45,9 +45,6 @@ class MeSettingsIn(BaseModel):
     """`PATCH /me/settings` body (§7: language, email_notifications, password change).
 
     Every field is optional and a partial patch: absent means "leave alone".
-    `email` needs the distinction between absent and explicit `null` (clearing an
-    address is a real operation), so the handler consults `model_fields_set`
-    rather than treating None as "unchanged".
 
     §7 confines this endpoint to the user's *own preferences*. `role`, `is_admin`,
     `is_root`, `active` and `ics_token` are structurally absent — privilege

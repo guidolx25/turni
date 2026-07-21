@@ -227,8 +227,8 @@ def update_settings(
     db: DbDep,
     cookie: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
 ) -> MeOut:
-    """§7: the caller's own preferences (language, email opt-out, address) and
-    their own password.
+    """§7: the caller's own preferences (language, email opt-out) and their own
+    password. The email ADDRESS is deliberately not among them — see MeSettingsIn.
 
     A partial patch — an absent field is untouched. Nothing here can reach
     `role`, `is_admin`, `is_root`, `active` or `ics_token`: `MeSettingsIn` has no
