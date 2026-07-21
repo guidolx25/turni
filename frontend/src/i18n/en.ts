@@ -210,8 +210,7 @@ export const en = {
     'Generate, publish and hand-correct the schedule. Everything done here is recorded.',
   'admin.noWeeks': 'No week available.',
 
-  'admin.noWeekSelected':
-    'No week selected: pick one above to see the controls.',
+  'admin.noWeekSelected': 'No week selected: pick one above to see the controls.',
   'admin.solve.title': 'Generate schedule',
   'admin.solve.help':
     'Generating computes the schedule but does not make it visible: publishing is a separate step.',
