@@ -54,6 +54,20 @@ class Settings(BaseSettings):
     # actually come here to make.
     session_ttl_hours: int = 24 * 14
 
+    # --- email channel (§10 Channel 2, §11 RESEND_API_KEY) ---
+    # Empty means "no email transport": every send is collected in-process by the
+    # null transport instead of reaching the network. That is the dev and test
+    # default ON PURPOSE — a missing key must degrade to "no email", never to a
+    # failed request, because §10 makes email a side effect of a domain event.
+    resend_api_key: str = ""
+    # Resend requires an RFC 5322 From on every send; §11 does not name it, so it
+    # is config with a sandbox default. Deployments must set it to a verified
+    # domain or Resend rejects the send (which is logged and swallowed, §10).
+    resend_from: str = "Turni <onboarding@resend.dev>"
+    # Bounded so a hung Resend call cannot pin a request thread; the send is
+    # fire-and-forget from the caller's point of view.
+    resend_timeout_seconds: float = 10.0
+
     # --- login rate limit (§7 "simple rate-limit on login") ---
     login_max_attempts: int = 10
     login_window_seconds: int = 15 * 60

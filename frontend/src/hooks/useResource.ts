@@ -6,8 +6,8 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { errorKey as toErrorKey } from '../api/client'
-import { scheduleApi, swapsApi, weeksApi } from '../api/endpoints'
-import type { ScheduleOut, SwapRequestOut, WeekOut } from '../api/types'
+import { constraintsApi, scheduleApi, swapsApi, weeksApi } from '../api/endpoints'
+import type { ConstraintOut, ScheduleOut, SwapRequestOut, WeekOut } from '../api/types'
 import type { TranslationKey } from '../i18n'
 
 export interface Resource<T> {
@@ -74,6 +74,11 @@ export function useWeeks(): Resource<WeekOut[]> {
 
 export function useSchedule(week: string | null): Resource<ScheduleOut> {
   const load = useCallback(() => scheduleApi.get(week ?? ''), [week])
+  return useResource(week ? load : null)
+}
+
+export function useConstraints(week: string | null): Resource<ConstraintOut[]> {
+  const load = useCallback(() => constraintsApi.list(week ?? ''), [week])
   return useResource(week ? load : null)
 }
 

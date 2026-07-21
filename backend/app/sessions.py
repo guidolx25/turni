@@ -62,6 +62,24 @@ def logout_session(db: DbSession, token: str) -> bool:
     return bool(result.rowcount)
 
 
+def revoke_other_sessions(db: DbSession, user: User, keep_token: str | None) -> int:
+    """Delete every session of `user` except `keep_token`; returns how many.
+
+    Used by the §7 password change. Changing a password is how a user reacts to
+    "someone else has my credentials", so it has to be a real revocation of the
+    other devices — the same reasoning §5 applies to deactivation ("revokes the
+    user's open sessions, not just their next login"). The caller's own session
+    survives, because logging someone out of the browser they just used to fix
+    their password is a punishment for doing the right thing.
+
+    `keep_token=None` revokes all of them.
+    """
+    stmt = delete(Session).where(Session.user_id == user.id)
+    if keep_token is not None:
+        stmt = stmt.where(Session.id != keep_token)
+    return int(db.execute(stmt).rowcount)
+
+
 def purge_expired_sessions(db: DbSession, *, now: dt.datetime | None = None) -> int:
     """Delete every expired session row; returns how many.
 

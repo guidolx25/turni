@@ -32,7 +32,9 @@ const me = {
 
 test('login form posts credentials and navigates on success', async () => {
   const { calls } = stubFetch({
-    'GET /me': { status: 401, json: { detail: 'not_authenticated' } },
+    // 401 on first load (no session), then the real row: AuthContext re-reads
+    // /me after a successful POST rather than trusting the login response.
+    'GET /me': [{ status: 401, json: { detail: 'not_authenticated' } }, { json: me }],
     'POST /auth/login': { json: me },
   })
 

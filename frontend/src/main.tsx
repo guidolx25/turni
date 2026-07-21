@@ -9,6 +9,7 @@ import { LanguageProvider } from './i18n/index.tsx'
 
 const rootElement = document.getElementById('root')
 if (!rootElement) {
+  // i18n-gate-ignore: developer invariant, thrown on a wiring bug — never rendered as UI copy.
   throw new Error('Root element #root not found in index.html')
 }
 

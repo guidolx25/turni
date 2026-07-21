@@ -1,8 +1,9 @@
 """APScheduler wiring (spec §3, §4, §11) — the cron triggers.
 
 Only the *timers* live here; the job bodies are in `app.jobs`
-(`run_weekly_solve` for the Sunday-17:00 window close, `expire_stale_swaps` for
-the hourly §4 swap expiry). The weekly trigger carries `timezone=Europe/Rome`,
+(`run_weekly_solve` for the Sunday-17:00 window close, `run_window_reminder` for
+the §10 Saturday-17:00 `window_closing_24h` reminder, `expire_stale_swaps` for
+the hourly §4 swap expiry). The weekly triggers carry `timezone=Europe/Rome`,
 so APScheduler fires at 17:00 *local* wall-clock and follows DST automatically —
 the same Europe/Rome discipline the submission deadline uses
 (`app.scheduling.window_deadline`).
@@ -22,13 +23,20 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
 from app.db import SessionLocal
-from app.jobs import expire_stale_swaps, run_weekly_solve
+from app.jobs import expire_stale_swaps, run_weekly_solve, run_window_reminder
 
 logger = logging.getLogger(__name__)
 
 # §3: the window closes and the upcoming week is solved+published Sunday 17:00.
 WINDOW_CLOSE_JOB_ID = "weekly_window_close_solve"
 WINDOW_CLOSE_TRIGGER = CronTrigger(day_of_week="sun", hour=17, minute=0, timezone=settings.tz)
+
+# §10: the `window_closing_24h` reminder cron — Saturday 17:00, i.e. 24 h before
+# the §3.1 deadline above. Same `timezone=settings.tz`, so the two stay exactly
+# 24 h apart across a DST boundary as *wall clock*, which is what "24 h left"
+# means to a worker reading it.
+WINDOW_REMINDER_JOB_ID = "weekly_window_reminder"
+WINDOW_REMINDER_TRIGGER = CronTrigger(day_of_week="sat", hour=17, minute=0, timezone=settings.tz)
 
 # §4: pending swaps expire 48 h after creation. Hourly sweep — the deadline has
 # hour-level granularity, and the lazy check in `app.swap_service` catches any
@@ -41,6 +49,12 @@ def _weekly_window_close() -> None:
     """Job entry point: one fresh session per fire, real current instant."""
     with SessionLocal() as db:
         run_weekly_solve(db, dt.datetime.now(dt.UTC))
+
+
+def _weekly_window_reminder() -> None:
+    """Job entry point: one fresh session per fire, real current instant."""
+    with SessionLocal() as db:
+        run_window_reminder(db, dt.datetime.now(dt.UTC))
 
 
 def _hourly_swap_expiry() -> None:
@@ -61,6 +75,18 @@ def build_scheduler() -> BackgroundScheduler:
         trigger=WINDOW_CLOSE_TRIGGER,
         id=WINDOW_CLOSE_JOB_ID,
         coalesce=True,
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _weekly_window_reminder,
+        trigger=WINDOW_REMINDER_TRIGGER,
+        id=WINDOW_REMINDER_JOB_ID,
+        coalesce=True,
+        # Shorter grace than the solve: a reminder that arrives hours late has
+        # eaten the notice it exists to give, and a reminder fired after the
+        # Sunday deadline would be actively misleading. `run_window_reminder`
+        # re-checks the window anyway, so a late fire is a no-op, not a lie.
         misfire_grace_time=3600,
         replace_existing=True,
     )

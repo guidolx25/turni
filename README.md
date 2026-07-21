@@ -57,7 +57,8 @@ Environment variables (see `docs/shift-scheduler-spec.md` §11):
 | Variable | Purpose |
 |---|---|
 | `SECRET_KEY` | session signing |
-| `RESEND_API_KEY` | transactional email |
+| `RESEND_API_KEY` | transactional email; unset means email is collected in-process, never sent |
+| `RESEND_FROM` | sender address for outgoing email (must be a Resend-verified domain) |
 | `REQUIRE_ADMIN_APPROVAL` | swap approval mode (default `false`) |
 | `TZ` | must be `Europe/Rome` |
 

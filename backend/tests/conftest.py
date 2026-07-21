@@ -96,6 +96,26 @@ def _app_loggers_enabled() -> None:
             lg.disabled = False
 
 
+@pytest.fixture(autouse=True)
+def email_outbox() -> Generator[Any, None, None]:
+    """A fresh §10 Channel 2 outbox per test, and never a real Resend call.
+
+    `app.email` already falls back to the collecting `NullTransport` when
+    `RESEND_API_KEY` is unset, but that instance is module-global and would
+    accumulate across the whole session. Pinning a new one per test makes
+    "what would have been emailed" a per-test fact; autouse, so a test that
+    triggers `notify()` incidentally cannot leak messages into the next.
+    """
+    from app.email import NullTransport, set_transport
+
+    transport = NullTransport()
+    set_transport(transport)
+    try:
+        yield transport
+    finally:
+        set_transport(None)
+
+
 def run_upgrade(url: str, revision: str = "head") -> None:
     with database_url(url):
         command.upgrade(alembic_config(url), revision)

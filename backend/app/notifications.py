@@ -1,11 +1,11 @@
 """The single notification dispatch abstraction (spec §10).
 
 `notify()` is the one entry point every event goes through, so a new channel is
-added here without touching a single call site (§10). v1 ships **Channel 1
-(in-app)** only: a `notifications` row the frontend polls. Channel 2 (email via
-Resend, per-user opt-out, templated in the user's language) and Channel 3 (PWA
-push) slot in behind this function in Phase 5 / later — the callers never learn
-which channels exist.
+added here without touching a single call site (§10). It ships **Channel 1
+(in-app)** — a `notifications` row the frontend polls — and **Channel 2 (email
+via Resend, per-user opt-out, templated in the user's language)**. Channel 3 (PWA
+push) slots in behind this same function later; the callers never learn which
+channels exist, which is the whole point of the abstraction.
 
 Event names are §10's exact strings, kept as constants so a typo cannot silently
 create an event nobody listens for. `notifications.event_type` is a free-text
@@ -14,11 +14,18 @@ column (§6), so this list can grow without a migration.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Mapping
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
+from app import email_templates
+from app.email import send_email
 from app.models import Notification, User
+
+logger = logging.getLogger(__name__)
 
 # §10 events. Only the ones a wired path emits today are defined; the rest arrive
 # with their features (swaps → Phase 4, the reminder cron → later).
@@ -47,6 +54,35 @@ EVENT_ADMIN_OVERRIDE = "admin_override"
 EVENT_SWAP_REQUESTED = "swap_requested"
 EVENT_SWAP_ACCEPTED = "swap_accepted"
 EVENT_SWAP_REJECTED = "swap_rejected"
+# §3/§10: the Saturday-17:00 reminder that the Sunday-17:00 submission window is
+# 24 h from closing. Per-user (every active worker), not a role fan-out.
+EVENT_WINDOW_CLOSING_24H = "window_closing_24h"
+
+# §10's closed event list. Kept here, next to the constants, so the email-template
+# registry can be checked against it — see the parity guard below.
+ALL_EVENTS: frozenset[str] = frozenset(
+    {
+        EVENT_SCHEDULE_PUBLISHED,
+        EVENT_SWAP_REQUESTED,
+        EVENT_SWAP_ACCEPTED,
+        EVENT_SWAP_REJECTED,
+        EVENT_SACRIFICE_PROPOSED,
+        EVENT_SACRIFICE_RESOLVED,
+        EVENT_SACRIFICE_ESCALATED,
+        EVENT_WEEKEND_HARD_ESCALATED,
+        EVENT_WINDOW_CLOSING_24H,
+        EVENT_ADMIN_OVERRIDE,
+    }
+)
+
+if ALL_EVENTS != email_templates.SUPPORTED_EVENTS:
+    # Import-time, explicit raise (not `assert`, which `python -O` strips): every
+    # §10 event must have an email template, and the template registry must not
+    # invent events §10 does not list. Combined with the per-event IT/EN guard in
+    # `app.email_templates`, this makes "an event with no email, or with only one
+    # language" unrepresentable in a running process.
+    _difference = ALL_EVENTS.symmetric_difference(email_templates.SUPPORTED_EVENTS)
+    raise RuntimeError(f"§10 events and email templates disagree on: {sorted(_difference)}")
 
 
 def notify(
@@ -54,12 +90,18 @@ def notify(
 ) -> None:
     """§10: fan `event_type` out to every enabled channel for `user`.
 
-    Today that is only the in-app channel; email and PWA push are added inside
-    this function later, which is the whole point of routing every event through
-    one abstraction. Does not commit — the caller owns the transaction so a
-    notification and the state change that triggered it land atomically.
+    Channel 1 (in-app) and Channel 2 (email) today; PWA push is added here later.
+    Does not commit — the caller owns the transaction so a notification and the
+    state change that triggered it land atomically.
+
+    The email is dispatched inline, so a caller that later rolls back will have
+    sent a message about a change that did not happen. Accepted for v1: every
+    current call site commits immediately after notifying, and the alternative is
+    a persistent outbox, which §10 does not ask for. Never re-order this so a
+    channel failure can reach the caller — see `_notify_email`.
     """
     _notify_in_app(db, user, event_type, payload)
+    _notify_email(db, user, event_type, payload)
 
 
 def _notify_in_app(
@@ -67,3 +109,68 @@ def _notify_in_app(
 ) -> None:
     """Channel 1 (§10): persist a `notifications` row the frontend polls."""
     db.add(Notification(user_id=user.id, event_type=event_type, payload=payload, read=False))
+
+
+def _referenced_user_ids(payload: Mapping[str, Any] | None) -> set[int]:
+    """Every user id this payload mentions, so the email body can name people.
+
+    §10 payloads are DATA — ids, not prose — precisely so the in-app channel can
+    localize them in the browser. Email has no browser, so the ids have to become
+    names somewhere, and this is the layer that still has a session. Only the
+    keys §10's events actually use are read; anything unexpected is ignored
+    rather than guessed at.
+    """
+    if not payload:
+        return set()
+    ids: set[int] = set()
+    for key in ("from_user", "to_user", "user_id", "worker_id"):
+        value = payload.get(key)
+        if isinstance(value, int):
+            ids.add(value)
+    conflict = payload.get("conflict")
+    if isinstance(conflict, list):
+        for item in conflict:
+            if isinstance(item, Mapping) and isinstance(item.get("worker_id"), int):
+                ids.add(item["worker_id"])
+    return ids
+
+
+def _resolve_names(db: DbSession, payload: dict[str, Any] | None) -> dict[int, str]:
+    """`{user_id: display_name}` for the ids in `payload`.
+
+    Root is resolved like anyone else: §5 hides the root ROLE from listings and
+    role-based fan-outs, not the man — Matteo works real shifts, and an email
+    about a shift he holds must say his name.
+    """
+    ids = _referenced_user_ids(payload)
+    if not ids:
+        return {}
+    rows = db.scalars(select(User).where(User.id.in_(ids))).all()
+    return {row.id: row.display_name for row in rows}
+
+
+def _notify_email(
+    db: DbSession, user: User, event_type: str, payload: dict[str, Any] | None
+) -> None:
+    """Channel 2 (§10): Resend, per-user opt-out, in the user's language.
+
+    Three gates, all of them silent no-ops rather than errors:
+
+    * `email_notifications` false — the §6/§10 opt-out.
+    * no `email` — §6 makes the column nullable; there is nowhere to send.
+    * no template — `notifications.event_type` is free text (§6), so an event may
+      legitimately be in-app only. Logged, because for a §10 event it would be a
+      bug (and the import-time guard above makes that unreachable).
+
+    Cannot raise: `send_email` swallows transport failures (§10 email is a side
+    effect of a domain event, never a reason to fail it).
+    """
+    if not user.email_notifications or not user.email:
+        return
+    rendered = email_templates.render(
+        event_type, user.language, payload, _resolve_names(db, payload)
+    )
+    if rendered is None:
+        logger.warning("no email template for event_type=%s; in-app only", event_type)
+        return
+    send_email(user.email, rendered.subject, rendered.text, rendered.html)

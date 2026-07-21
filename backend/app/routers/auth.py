@@ -1,7 +1,11 @@
-"""Auth routes: `POST /auth/login`, `POST /auth/logout`, `GET /me` (spec §7).
+"""Auth + own-account routes: `POST /auth/login`, `POST /auth/logout`, `GET /me`,
+`PATCH /me/settings`, `POST /me/ics-token` (spec §7).
 
 No signup route exists and none may be added: §5 is explicit that there is no
-public signup — accounts are seeded or created by root.
+public signup — accounts are seeded or created by root. The `/me` routes are the
+counterpart of that rule: a user may change their own preferences and their own
+credentials here, and nothing else — every field that carries authority (§5) is
+absent from the request model, not merely rejected by a check.
 """
 
 from __future__ import annotations
@@ -11,19 +15,27 @@ from typing import Annotated
 from fastapi import APIRouter, Cookie, HTTPException, Request, Response, status
 from sqlalchemy import select
 
+from app import audit
 from app.config import settings
 from app.deps import CurrentWorker, DbDep
 from app.models import User
 from app.ratelimit import SlidingWindowRateLimiter
-from app.schemas import LoginIn, MeOut, UserOut
+from app.schemas import LoginIn, MeOut, MeSettingsIn, UserOut
 from app.security import (
     dummy_password_hash,
     hash_password,
+    new_ics_token,
     password_needs_rehash,
     unsign_token,
     verify_password,
 )
-from app.sessions import clear_session_cookie, create_session, logout_session, set_session_cookie
+from app.sessions import (
+    clear_session_cookie,
+    create_session,
+    logout_session,
+    revoke_other_sessions,
+    set_session_cookie,
+)
 
 router = APIRouter(tags=["auth"])
 
@@ -38,6 +50,12 @@ _ip_limiter = SlidingWindowRateLimiter(settings.login_max_attempts, settings.log
 
 ERROR_INVALID_CREDENTIALS = "invalid_credentials"
 ERROR_RATE_LIMITED = "rate_limited"
+# §7 PATCH /me/settings. Machine codes, not prose — §9 keeps every user-visible
+# string in the i18n dictionaries.
+ERROR_INVALID_CURRENT_PASSWORD = "invalid_current_password"
+ERROR_CURRENT_PASSWORD_REQUIRED = "current_password_required"
+ERROR_NEW_PASSWORD_REQUIRED = "new_password_required"
+ERROR_INVALID_EMAIL = "invalid_email"
 
 
 def _client_ip(request: Request) -> str:
@@ -137,4 +155,139 @@ def me(user: CurrentWorker) -> MeOut:
     holds it via `is_root`, which never serializes), so /me states the rows
     outright rather than leaving the frontend to infer them from a flag.
     """
+    return MeOut.for_user(user)
+
+
+def _current_token(cookie: str | None) -> str | None:
+    """The caller's own session token, or None if the cookie is absent/forged.
+
+    A None here only widens the revocation (every session goes), so a forged
+    cookie cannot use this to *keep* a session alive.
+    """
+    return unsign_token(cookie) if cookie else None
+
+
+def _normalized_email(raw: str | None) -> str | None:
+    """Validate and normalize an address for `users.email` (§6, nullable).
+
+    Explicit `null` — and an empty string, which is what an emptied form field
+    sends — clears the address. §10's email channel then has nowhere to send and
+    silently skips, which is the intended way to be reachable in-app only.
+
+    The check is deliberately shallow (one `@`, non-empty both sides, a dot in
+    the domain, no whitespace): it catches typos without pretending to implement
+    RFC 5322. A well-formed address that does not exist fails at Resend, where it
+    is logged and dropped rather than breaking a domain event (§10).
+    """
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    local, separator, domain = value.partition("@")
+    malformed = (
+        not separator
+        or not local
+        or not domain
+        or "." not in domain
+        or any(char.isspace() for char in value)
+    )
+    if malformed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=ERROR_INVALID_EMAIL
+        )
+    return value
+
+
+def _apply_password_change(db: DbDep, user: User, body: MeSettingsIn, cookie: str | None) -> None:
+    """§7 password change: verify the current password, rehash, revoke elsewhere.
+
+    Requiring the current password is what stops a stolen session cookie from
+    becoming permanent account takeover. On success the user's OTHER sessions are
+    deleted (mirroring §5's "deactivation revokes open sessions"), so a change
+    made because a device was lost actually evicts that device; the caller's own
+    session survives, so they are not logged out of the browser they just used.
+    """
+    if body.new_password is None:
+        # A current_password with no new_password is a half-formed request, not a
+        # no-op: answering 200 would tell the caller a change happened.
+        if body.current_password is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=ERROR_NEW_PASSWORD_REQUIRED,
+            )
+        return
+
+    if body.current_password is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=ERROR_CURRENT_PASSWORD_REQUIRED,
+        )
+    if not verify_password(user.password_hash, body.current_password):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_INVALID_CURRENT_PASSWORD
+        )
+
+    user.password_hash = hash_password(body.new_password)
+    revoked = revoke_other_sessions(db, user, _current_token(cookie))
+    audit.record(
+        db,
+        user,
+        audit.ACTION_CREDENTIAL,
+        "user",
+        user.id,
+        {"change": "password", "sessions_revoked": revoked},
+    )
+
+
+@router.patch("/me/settings", response_model=MeOut)
+def update_settings(
+    body: MeSettingsIn,
+    user: CurrentWorker,
+    db: DbDep,
+    cookie: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+) -> MeOut:
+    """§7: the caller's own preferences (language, email opt-out, address) and
+    their own password.
+
+    A partial patch — an absent field is untouched. Nothing here can reach
+    `role`, `is_admin`, `is_root`, `active` or `ics_token`: `MeSettingsIn` has no
+    such fields and forbids extras, so those are not rejected by a check that
+    could be forgotten, they are unrepresentable in the request.
+
+    `language` is the setting §10 Channel 2 reads to pick the email template, so
+    changing it here changes the language of the next email.
+    """
+    if body.language is not None:
+        user.language = body.language
+    if body.email_notifications is not None:
+        user.email_notifications = body.email_notifications
+    # `model_fields_set` and not `is not None`: an explicit null clears the
+    # address, which is a different request from omitting the field.
+    if "email" in body.model_fields_set:
+        user.email = _normalized_email(body.email)
+
+    _apply_password_change(db, user, body, cookie)
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return MeOut.for_user(user)
+
+
+@router.post("/me/ics-token", response_model=MeOut)
+def regenerate_ics_token(user: CurrentWorker, db: DbDep) -> MeOut:
+    """§6 (v1.7): mint a fresh `/export/ics` credential for the caller.
+
+    The calendar-feed URL is the leakiest credential in the system — pasted into
+    calendar apps, synced to family devices — so §6 makes revocation a *per-user
+    regeneration*, never a SECRET_KEY rotation that would log everyone out. The
+    old token stops resolving the moment this commits; the user re-subscribes
+    with the new URL, which /me returns (the only schema allowed to carry it).
+    """
+    user.ics_token = new_ics_token()
+    audit.record(db, user, audit.ACTION_CREDENTIAL, "user", user.id, {"change": "ics_token"})
+    db.add(user)
+    db.commit()
+    db.refresh(user)
     return MeOut.for_user(user)

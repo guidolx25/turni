@@ -41,6 +41,41 @@ class LoginIn(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class MeSettingsIn(BaseModel):
+    """`PATCH /me/settings` body (§7: language, email_notifications, password change).
+
+    Every field is optional and a partial patch: absent means "leave alone".
+    `email` needs the distinction between absent and explicit `null` (clearing an
+    address is a real operation), so the handler consults `model_fields_set`
+    rather than treating None as "unchanged".
+
+    §7 confines this endpoint to the user's *own preferences*. `role`, `is_admin`,
+    `is_root`, `active` and `ics_token` are structurally absent — privilege
+    escalation by PATCH is not something to defend against with a check, it is
+    something the request model must be unable to express (§5 puts user
+    management on root's `/root/users`, not here).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    language: Language | None = None
+    email_notifications: bool | None = None
+    # Bounded by the §6 column width. Not `EmailStr`: that pulls in
+    # `email-validator` for a check the transport performs anyway — a malformed
+    # address fails at Resend, is logged, and never breaks a domain event (§10).
+    # The light shape check in the handler catches typos, not RFC edge cases.
+    email: str | None = Field(default=None, max_length=255)
+    # A password change is `current_password` + `new_password` together (§7): the
+    # session cookie proves who you are, the current password proves you are still
+    # at the keyboard, which is what makes a stolen cookie unable to lock the owner
+    # out of their own account.
+    current_password: str | None = Field(default=None, min_length=1, max_length=256)
+    # Minimum length is a floor the spec does not set; 8 is chosen so the endpoint
+    # cannot be used to weaken an account to a one-character password. Max mirrors
+    # LoginIn so argon2 never sees an unbounded body.
+    new_password: str | None = Field(default=None, min_length=8, max_length=256)
+
+
 class UserOut(BaseModel):
     """A user as any authenticated caller may see them (§5).
 

@@ -24,10 +24,11 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.config import settings
 from app.enums import SwapStatus, WeekStatus
-from app.models import SwapRequest
+from app.models import SwapRequest, User
+from app.notifications import EVENT_WINDOW_CLOSING_24H, notify
 from app.publish_service import publish_week
 from app.sacrifice_service import open_sacrifice
-from app.scheduling import get_or_create_week
+from app.scheduling import get_or_create_week, is_submittable, window_deadline
 from app.solve_service import run_solve
 from app.solver import SolverResult, SolverStatus
 from app.swap_service import SWAP_TTL, expire_swap
@@ -78,6 +79,49 @@ def run_weekly_solve(db: DbSession, now: dt.datetime) -> SolverResult | None:
     publish_week(db, week, actor=None)  # system action (§6: null audit actor)
     logger.info("weekly solve published %s (%s)", target, result.status.value)
     return result
+
+
+def run_window_reminder(db: DbSession, now: dt.datetime) -> int:
+    """§10 `window_closing_24h`: tell the workers the submission window closes in 24 h.
+
+    Fired Saturday 17:00 Europe/Rome (`app.scheduler`), exactly 24 h before the
+    §3.1 Sunday-17:00 deadline for the same upcoming week `run_weekly_solve`
+    targets — both derive it from `upcoming_monday`, so the reminder and the
+    solve can never disagree about which week they mean. The deadline instant in
+    the payload comes from `app.scheduling.window_deadline`, never recomputed
+    here, so it is the same DST-correct instant the lifecycle enforces.
+
+    **Audience: every active user.** Deliberately not "only those who have not
+    submitted yet": §3.1 keeps constraints editable for as long as the week is
+    open, so "24 h left" is actionable for someone who submitted on Monday and
+    wants to change their mind. Per-user, exactly like `schedule_published` — so
+    root receives it as a worker (he works shifts); §5 hides root from
+    *role-based* fan-outs, which this is not.
+
+    Skipped when the window is already shut — a `solved` week (an admin pressed
+    "Generate now" early, §3.2) has nothing left to remind anyone about. Returns
+    the number of users notified.
+    """
+    target = upcoming_monday(now)
+    week = get_or_create_week(db, target)
+    if not is_submittable(week, now):
+        logger.info(
+            "window reminder skipped: week %s is %s, window already closed",
+            target,
+            week.status.value,
+        )
+        return 0
+
+    payload = {
+        "week": week.monday_date.isoformat(),
+        "deadline": window_deadline(week.monday_date).isoformat(),
+    }
+    recipients = db.scalars(select(User).where(User.active.is_(True))).all()
+    for user in recipients:
+        notify(db, user, EVENT_WINDOW_CLOSING_24H, payload)
+    db.commit()
+    logger.info("window reminder sent for %s to %d user(s)", target, len(recipients))
+    return len(recipients)
 
 
 def expire_stale_swaps(db: DbSession, now: dt.datetime) -> int:

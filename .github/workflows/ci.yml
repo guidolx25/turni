@@ -40,6 +40,11 @@ jobs:
       - run: npm ci
       - name: Lint
         run: npm run lint
+      # Spec §9: every user-visible string goes through the it/en dictionaries.
+      # The lint rule above covers JSX; this covers strings built outside it,
+      # and checks IT/EN key parity independently of the type-level constraint.
+      - name: i18n gate
+        run: npm run i18n:gate
       - name: Format check
         run: npm run format:check
       - name: Typecheck

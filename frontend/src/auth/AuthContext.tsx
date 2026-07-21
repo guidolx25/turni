@@ -23,6 +23,8 @@ interface AuthContextValue {
   initializing: boolean
   login: (credentials: LoginIn) => Promise<void>
   logout: () => Promise<void>
+  /** Re-read /me after a settings write (language, email, ICS token). */
+  refreshUser: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -58,10 +60,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const login = useCallback(async (credentials: LoginIn) => {
-    const me = await authApi.login(credentials)
-    setUser(me)
+  const refreshUser = useCallback(async () => {
+    setUser(await authApi.me())
   }, [])
+
+  const login = useCallback(
+    async (credentials: LoginIn) => {
+      // §7: /auth/login answers UserOut — it establishes the session but carries
+      // neither `capabilities` nor `ics_token`. GET /me is what produces the
+      // MeOut the app renders from, so the two states can never disagree.
+      await authApi.login(credentials)
+      await refreshUser()
+    },
+    [refreshUser],
+  )
 
   const logout = useCallback(async () => {
     try {
@@ -72,8 +84,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo(
-    () => ({ user, initializing, login, logout }),
-    [user, initializing, login, logout],
+    () => ({ user, initializing, login, logout, refreshUser }),
+    [user, initializing, login, logout, refreshUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
@@ -81,6 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext)
+  // i18n-gate-ignore: developer invariant, thrown on a wiring bug — never rendered as UI copy.
   if (!ctx) throw new Error('useAuth requires <AuthProvider>')
   return ctx
 }

@@ -11,6 +11,12 @@ export const en = {
   'common.loading': 'Loading…',
   'common.retry': 'Retry',
   'common.cancel': 'Cancel',
+  'common.save': 'Save',
+  'common.saving': 'Saving…',
+  'common.saved': 'Saved',
+  'common.remove': 'Remove',
+  'common.copy': 'Copy',
+  'common.copied': 'Copied',
 
   'nav.schedule': 'Schedule',
   'nav.swaps': 'Swaps',
@@ -52,6 +58,7 @@ export const en = {
   'schedule.empty': 'No shift in this cell',
   'slot.am': 'Morning',
   'slot.pm': 'Afternoon',
+  'slot.full_day': 'All day',
   'role.bagnino': 'Lifeguard',
   'role.spiaggino': 'Beach worker',
 
@@ -82,6 +89,110 @@ export const en = {
   'swaps.status.expired': 'Expired',
   'swaps.status.pending_admin': 'Awaiting admin approval',
   'swaps.status.applied': 'Applied',
+
+  'constraints.title': 'My requests',
+  'constraints.intro': 'Tell us when you cannot work. You can edit as long as the week is open.',
+  'constraints.deadline': 'Closes Sunday at 17:00',
+  'constraints.readOnly.solved':
+    'Window closed: this week has already been solved and requests can no longer be edited.',
+  'constraints.readOnly.locked':
+    'Week published: requests can no longer be edited. A change now needs a swap.',
+  'constraints.readOnly.deadlinePassed':
+    'The Sunday 17:00 deadline has passed: wait for the schedule to be computed.',
+  'constraints.noWeeks': 'No week available.',
+  'constraints.day.free': 'Available',
+  'constraints.day.open': 'Edit {day}',
+  'constraints.day.collapse': 'Close {day}',
+  'constraints.slots.label': 'When you are unavailable',
+  'constraints.fullDayReplaces':
+    'You picked all day: choosing morning or afternoon will replace this request.',
+  'constraints.slotReplacesFullDay': 'All day replaces the slots already picked.',
+  'constraints.kind.label': 'How binding',
+  'constraints.kind.hard': 'Binding',
+  'constraints.kind.soft': 'Preference',
+  'constraints.kind.hardHelp':
+    'Binding: the solver cannot break it. If no schedule is possible you will be asked to move your free day.',
+  'constraints.kind.softHelp':
+    'Preference: the solver tries to honour it, but may ignore it to cover the shifts.',
+  'constraints.note.label': 'Note (optional)',
+  'constraints.note.placeholder': 'Reason, time, details…',
+  'constraints.weekend.hint':
+    'Saturday and Sunday follow a fixed template the solver never solves.',
+  'constraints.weekend.hardWarning':
+    'A binding weekend request cannot be resolved by solving: it is recorded and forwarded to an admin, who handles it by hand.',
+  'constraints.summary.hard': 'Binding',
+  'constraints.summary.soft': 'Preference',
+
+  'notifications.title': 'Notifications',
+  'notifications.empty': 'No notifications.',
+  'notifications.markAllRead': 'Mark all as read',
+  'notifications.bell': 'Notifications, {count} unread',
+  'notifications.unread': 'Unread',
+
+  // §10 event types → one line each, rendered from the structured payload.
+  'notif.schedule_published': 'Schedule published for week {week}.',
+  'notif.swap_requested': 'You received a swap request: {from} for {to} ({week}).',
+  'notif.swap_accepted': 'Swap accepted: {from} for {to} ({week}).',
+  'notif.swap_rejected': 'Swap rejected: {from} for {to} ({week}).',
+  'notif.sacrifice_proposed':
+    'No schedule is possible for {week}: you have been asked to move your free day to {day}.',
+  'notif.sacrifice_resolved':
+    'Proposal accepted: your free day for {week} is {day}. Schedule published.',
+  'notif.sacrifice_escalated': 'Unresolved conflict on week {week}: it needs manual handling.',
+  'notif.weekend_hard_escalated':
+    '{name} filed {day} ({slot}) as a binding unavailability: the weekend is a fixed template and needs handling by hand.',
+  'notif.window_closing_24h': 'Requests for week {week} close in 24 hours.',
+  'notif.admin_override': 'An admin changed the shifts for week {week}.',
+  // Any event type this build does not know — never raw JSON, never a crash.
+  'notif.unknown': 'New update.',
+  'notif.shift': '{day} {slot} ({role})',
+  'notif.conflict.title': 'Conflicting requests',
+  'notif.conflict.item': '{who}: {day}, {slot}',
+  'notif.conflict.you': 'Your request',
+  'notif.conflict.other': 'A colleague’s request',
+
+  'sacrifice.title': 'We need your decision',
+  'sacrifice.question':
+    'For week {week} there is no schedule that satisfies every binding request. Move your free day to {day}?',
+  'sacrifice.keepsHard':
+    'Your binding request stands either way: you will not work on the day you asked off.',
+  'sacrifice.acceptConsequence':
+    'If you accept, the schedule is recomputed with the moved free day and published.',
+  'sacrifice.declineConsequence':
+    'If you decline, the week stays unresolved and the conflict goes to an admin.',
+  'sacrifice.accept': 'Accept the move',
+  'sacrifice.decline': 'Decline',
+  'sacrifice.working': 'Sending…',
+  'sacrifice.accepted': 'Proposal accepted.',
+  'sacrifice.declined': 'Proposal declined: the decision goes to an admin.',
+
+  'settings.title': 'Settings',
+  'settings.language.title': 'Language',
+  'settings.language.help': 'Applies to the app and to the emails you receive.',
+  'settings.account.title': 'Account',
+  'settings.account.email': 'Email',
+  'settings.account.noEmail': 'No email on file.',
+  'settings.account.emailManaged':
+    'The email address is managed by the admin who created the account.',
+  'settings.account.notifications': 'Receive emails',
+  'settings.account.notificationsHelp':
+    'Notifications stay visible in the app even if you turn emails off.',
+  'settings.password.title': 'Change password',
+  'settings.password.current': 'Current password',
+  'settings.password.new': 'New password',
+  'settings.password.confirm': 'Confirm new password',
+  'settings.password.submit': 'Update password',
+  'settings.password.success': 'Password updated.',
+  'settings.password.mismatch': 'The two passwords do not match.',
+  'settings.ics.title': 'Calendar feed (ICS)',
+  'settings.ics.help':
+    'Subscribe your calendar to this address to see your published shifts. The address is personal: whoever holds it sees your shifts.',
+  'settings.ics.url': 'Calendar address',
+  'settings.ics.regenerate': 'Regenerate address',
+  'settings.ics.regenerateWarning':
+    'Regenerating breaks every calendar already subscribed: you will have to subscribe again. That is exactly the point if the address leaked.',
+  'settings.ics.regenerateConfirm': 'Confirm regeneration?',
+  'settings.ics.regenerated': 'New address generated.',
 
   // Backend error codes (§7 `{detail: "snake_case_code"}`) → `errors.<code>`.
   'errors.generic': 'Something went wrong. Please try again.',
@@ -114,4 +225,7 @@ export const en = {
   'errors.swap_assignment_not_found': 'Shift not found — reload the week.',
   'errors.swap_week_mismatch': 'The two shifts belong to different weeks.',
   'errors.swap_self': 'You cannot swap a shift with yourself.',
+  'errors.feed_not_found': 'Invalid calendar address.',
+  'errors.invalid_password': 'Your current password is not correct.',
+  'errors.password_too_short': 'The new password is too short.',
 } satisfies Record<TranslationKey, string>
