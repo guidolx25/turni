@@ -97,9 +97,22 @@ def write_solver_state(db: DbSession, week: Week) -> None:
 
     Idempotent, so any caller that changes weekend rows can simply re-run it.
 
+    The write set is AUTHORITATIVE, not additive: a worker with no Sunday row in
+    this week must end with no `solver_state` row at all, exactly as the jolly
+    does (§2.2 — absent means no boundary term). Upserting alone would be a bug,
+    because a weekend swap can move a worker OFF Sunday entirely: an H5-legal
+    Sat↔Sun bagnino trade leaves one bagnino holding both Sunday slots and the
+    other holding both Saturday slots, and the latter's stale row would keep
+    seeding next Monday from a Sunday they did not work.
+
+    Both the write and the clear are guarded on `last_worked_date`, which is why
+    §6 dates the boundary at all: a swap on week N stays acceptable after week
+    N+1 has published, and must not overwrite the newer week's boundary with its
+    own older Sunday.
+
     The full-weekend workers get a NULL `last_worked_slot` (the FULL_DAY boundary
-    the single am/pm column cannot hold); the jolly, absent from Sunday, gets no
-    row at all — no boundary term next week (§2.2)."""
+    the single am/pm column cannot hold)."""
+    sunday = week.monday_date + dt.timedelta(days=_DAY_OFFSET[Day.SUN])
     weekend = tuple(
         WeekendAssignment(
             date=week.monday_date + dt.timedelta(days=_DAY_OFFSET[row.day]),
@@ -113,13 +126,32 @@ def write_solver_state(db: DbSession, week: Week) -> None:
             )
         ).all()
     )
+    worked_sunday: set[int] = set()
     for cont in compute_next_solver_state(weekend):
+        worked_sunday.add(cont.worker_id)
         st = db.get(SolverState, cont.worker_id)
         if st is None:
             st = SolverState(user_id=cont.worker_id)
             db.add(st)
+        elif _is_newer(st.last_worked_date, cont.last_worked_date):
+            continue  # a later week already set this boundary; leave it alone
         st.last_worked_slot = cont.last_worked_slot
         st.last_worked_date = cont.last_worked_date
+
+    # Anyone this week's Sunday does NOT include has no boundary to carry.
+    for st in db.scalars(
+        select(SolverState).where(SolverState.user_id.notin_(worked_sunday))
+    ).all():
+        if not _is_newer(st.last_worked_date, sunday):
+            db.delete(st)
+
+
+def _is_newer(stored: dt.date | None, candidate: dt.date) -> bool:
+    """Is the STORED boundary from a later Sunday than `candidate`?
+
+    An undated row cannot be ordered, so it never wins: it is treated as stale
+    and yields to a dated one. Every row this module writes carries a date."""
+    return stored is not None and stored > candidate
 
 
 def _fan_out_published(db: DbSession, week: Week) -> None:

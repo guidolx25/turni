@@ -725,6 +725,97 @@ def test_a_sunday_swap_re_seeds_next_weeks_alternation_boundary(
         )
 
 
+def test_a_saturday_for_sunday_swap_clears_the_vacated_boundary(
+    client: TestClient, session: DbSession
+) -> None:
+    """§2.2: the `solver_state` write set is AUTHORITATIVE, not additive.
+
+    An H5-legal Sat↔Sun bagnino trade moves one bagnino OFF Sunday entirely —
+    he ends holding both Saturday slots while the other holds both Sunday
+    slots. H2 permits it (distinct (day, slot) keys) and H3/H4 never look at the
+    weekend, so the swap applies. A merely-upserting write would leave the
+    vacated worker's row behind, seeding next Monday's alternation from a Sunday
+    he did not work. §2.2 wants his boundary term ABSENT, exactly as the
+    jolly's is."""
+    roster = create_full_roster(session)
+    week = _published_week(session, roster, _future_monday())
+    rows = _rows(session, week)
+    sat = next(a for a in rows if a.day is Day.SAT and a.role is AssignmentRole.BAGNINO)
+    # The other bagnino's SUNDAY row — so the trade crosses days.
+    sun = next(
+        a
+        for a in rows
+        if a.day is Day.SUN and a.role is AssignmentRole.BAGNINO and a.user_id != sat.user_id
+    )
+    requester = session.get(User, sat.user_id)
+    target = session.get(User, sun.user_id)
+    assert requester is not None and target is not None
+    assert session.get(SolverState, target.id) is not None, (
+        "precondition: the Sunday holder starts with a boundary"
+    )
+
+    login(client, requester.username)
+    code, body = _create(client, target, sat, sun)
+    assert code == 201, body
+    login(client, target.username)
+    assert client.post(f"/swaps/{body['id']}/accept").status_code == 200
+
+    session.expire_all()
+    # The target gave up his only Sunday row → no boundary at all.
+    remaining_sunday = {
+        a.user_id
+        for a in _rows(session, week)
+        if a.day is Day.SUN and a.role is AssignmentRole.BAGNINO
+    }
+    assert target.id not in remaining_sunday, "precondition: he really left Sunday"
+    assert session.get(SolverState, target.id) is None, (
+        "a worker with no Sunday row must carry no boundary (§2.2)"
+    )
+    # ... and the worker who took both Sunday slots reads as a FULL_DAY boundary,
+    # which the single am/pm column holds as NULL (§6).
+    state = session.get(SolverState, requester.id)
+    assert state is not None and state.last_worked_slot is None
+
+
+def test_a_swap_never_overwrites_a_newer_weeks_boundary(
+    client: TestClient, session: DbSession
+) -> None:
+    """§6 dates the boundary for a reason. A swap on week N stays acceptable
+    after week N+1 has published, and must not drag the boundary back to N's
+    older Sunday — `last_worked_date` is what orders the two."""
+    roster = create_full_roster(session)
+    first = _published_week(session, roster, _future_monday())
+    second = _published_week(session, roster, _future_monday() + dt.timedelta(weeks=1))
+    newer = {
+        state.user_id: (state.last_worked_slot, state.last_worked_date)
+        for state in session.scalars(select(SolverState)).all()
+    }
+    assert all(date == second.monday_date + dt.timedelta(days=6) for _, date in newer.values()), (
+        "precondition: the later week owns the boundary"
+    )
+
+    # Now swap inside the EARLIER week.
+    rows = _rows(session, first)
+    sunday_bagnini = [a for a in rows if a.day is Day.SUN and a.role is AssignmentRole.BAGNINO]
+    mine, theirs = sorted(sunday_bagnini, key=lambda a: a.slot.value)
+    requester = session.get(User, mine.user_id)
+    target = session.get(User, theirs.user_id)
+    assert requester is not None and target is not None
+
+    login(client, requester.username)
+    code, body = _create(client, target, mine, theirs)
+    assert code == 201, body
+    login(client, target.username)
+    assert client.post(f"/swaps/{body['id']}/accept").status_code == 200
+
+    session.expire_all()
+    after = {
+        state.user_id: (state.last_worked_slot, state.last_worked_date)
+        for state in session.scalars(select(SolverState)).all()
+    }
+    assert after == newer, "the older week's swap must not disturb the newer boundary"
+
+
 def test_weekend_spiaggino_swap_is_refused(client: TestClient, session: DbSession) -> None:
     """§2.1 H5: any weekend swap with a spiaggino side is refused — the two
     full-day spiaggini are the template's fixed point."""
