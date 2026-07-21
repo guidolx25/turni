@@ -139,6 +139,19 @@ def write_solver_state(db: DbSession, week: Week) -> None:
         st.last_worked_date = cont.last_worked_date
 
     # Anyone this week's Sunday does NOT include has no boundary to carry.
+    #
+    # Deliberately global, not scoped to this week's roster: `solver_state` is
+    # keyed by user alone (§6) and holds ONE boundary per person — the most
+    # recent one — so "who is absent from Sunday" can only be asked of the whole
+    # table. The date guard is what makes that safe: a row belonging to a LATER
+    # published week is newer than this Sunday and survives untouched, so weeks
+    # published or swapped out of order cannot delete each other's boundaries.
+    #
+    # Deleting (rather than blanking) is the correct reading of §2.2: alternation
+    # is calendar-adjacent, and Sunday is Monday's only neighbour. A worker who
+    # did not work Sunday has no adjacent prior day, so they must contribute no
+    # boundary term at all — which `_load_prior_state` expresses as an absent
+    # row, exactly as it does for the jolly.
     for st in db.scalars(
         select(SolverState).where(SolverState.user_id.notin_(worked_sunday))
     ).all():
