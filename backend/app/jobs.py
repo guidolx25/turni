@@ -31,7 +31,7 @@ from app.models import SwapRequest, User
 from app.notifications import EVENT_WINDOW_CLOSING_24H, notify
 from app.publish_service import publish_week
 from app.sacrifice_service import open_sacrifice
-from app.scheduling import get_or_create_week, is_submittable, window_deadline
+from app.scheduling import ensure_horizon, get_or_create_week, is_submittable, window_deadline
 from app.sessions import purge_expired_sessions
 from app.solve_service import run_solve
 from app.solver import SolverResult, SolverStatus
@@ -165,12 +165,17 @@ def run_nightly_maintenance(db: DbSession, now: dt.datetime) -> Path | None:
             "sessions_purged": purged,
         },
     )
+    # §3: keep the rolling submission horizon stocked. Last, because it must not
+    # be skipped by a backup failure and must not itself abort the housekeeping —
+    # it is the chore that keeps the app usable, not one that protects data.
+    horizon = ensure_horizon(db, now)
     db.commit()
     logger.info(
-        "nightly maintenance complete: backup=%s pruned=%d sessions_purged=%d",
+        "nightly maintenance complete: backup=%s pruned=%d sessions_purged=%d horizon=%d",
         snapshot,
         len(pruned),
         purged,
+        len(horizon),
     )
     return snapshot
 

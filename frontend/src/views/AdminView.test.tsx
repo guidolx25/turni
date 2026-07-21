@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
 import App from '../App'
@@ -91,9 +91,9 @@ test('a worker without trigger_solve gets no admin nav entry and no admin route'
 
   // Redirected to the schedule, which is what a worker may see.
   expect(await screen.findByText(itDict['schedule.title'])).toBeInTheDocument()
-  expect(screen.queryByText(itDict['admin.title'])).not.toBeInTheDocument()
-  expect(screen.queryByLabelText(itDict['nav.admin'])).not.toBeInTheDocument()
-  expect(screen.queryByLabelText(itDict['nav.root'])).not.toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: itDict['admin.title'] })).not.toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: itDict['nav.admin'] })).not.toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: itDict['nav.root'] })).not.toBeInTheDocument()
 })
 
 test('an admin gets the admin nav entry but not the root one (§5 row 7)', async () => {
@@ -107,9 +107,9 @@ test('an admin gets the admin nav entry but not the root one (§5 row 7)', async
 
   renderWithProviders(<App />, '/admin')
 
-  expect(await screen.findByText(itDict['admin.title'])).toBeInTheDocument()
-  expect(screen.getByLabelText(itDict['nav.admin'])).toBeInTheDocument()
-  expect(screen.queryByLabelText(itDict['nav.root'])).not.toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: itDict['admin.title'] })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: itDict['nav.admin'] })).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: itDict['nav.root'] })).not.toBeInTheDocument()
 })
 
 // §2.3 / §8: the unsat core is DATA on the wire ({worker_id, day, slot}) and
@@ -400,4 +400,47 @@ test('the submissions view distinguishes binding from preference', async () => {
   expect(screen.getByText('Pasha')).toBeInTheDocument()
   expect(screen.getByText(itDict['constraints.kind.hard'])).toBeInTheDocument()
   expect(screen.getByText(itDict['constraints.kind.soft'])).toBeInTheDocument()
+})
+
+// --- discoverability --------------------------------------------------------
+
+test('the admin nav entry carries a VISIBLE label, not just an aria-label', async () => {
+  // These links were icon-only, named solely by `aria-label`. To a sighted user
+  // they read as decoration: the admin who owned the deployment never found the
+  // panel, so generate, publish, override and audit were all unreachable in
+  // practice while every one of them worked. A capability-gated control nobody
+  // can find is indistinguishable from a missing feature.
+  stubFetch({
+    'GET /me': { json: me(ADMIN_CAPABILITIES) },
+    'GET /notifications': { json: [] },
+    'GET /weeks': { json: [week('open')] },
+    'GET /admin/constraints': { json: SUBMISSIONS },
+    'GET /admin/audit': { json: { total: 0, limit: 20, offset: 0, entries: [] } },
+  })
+
+  renderWithProviders(<App />, '/')
+
+  const link = await screen.findByRole('link', { name: itDict['nav.admin'] })
+  // `getByText` finds a rendered text node — an aria-label alone would not
+  // satisfy it, which is precisely the regression being guarded.
+  expect(within(link).getByText(itDict['nav.admin'])).toBeInTheDocument()
+})
+
+test('an admin panel with no resolvable week explains itself instead of rendering nothing', async () => {
+  // Every week-scoped panel is gated on a resolved week, so an empty week list
+  // used to render a heading and then silence — visually identical to "you lack
+  // the capability", which is how it was read.
+  stubFetch({
+    'GET /me': { json: me(ADMIN_CAPABILITIES) },
+    'GET /notifications': { json: [] },
+    'GET /weeks': { json: [] },
+    'GET /admin/audit': { json: { total: 0, limit: 20, offset: 0, entries: [] } },
+  })
+
+  renderWithProviders(<App />, '/admin')
+
+  expect(await screen.findByRole('heading', { name: itDict['admin.title'] })).toBeInTheDocument()
+  // Awaited: the heading renders synchronously while /weeks is still in flight,
+  // and the empty state is what appears once it resolves.
+  expect(await screen.findByText(itDict['admin.noWeeks'])).toBeInTheDocument()
 })

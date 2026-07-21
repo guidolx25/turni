@@ -59,6 +59,11 @@ export const it = {
     'La finestra richieste è ancora aperta: i turni arrivano dopo la chiusura di domenica alle 17:00.',
   'schedule.notPublished.solved':
     'Il calendario è in preparazione e sarà visibile alla pubblicazione.',
+  // §3.2: solo admin/root vedono questa anteprima — la settimana è risolta ma
+  // non ancora pubblicata, e i lavoratori non vedono nulla.
+  'schedule.preview': 'Anteprima: non ancora pubblicata',
+  'schedule.publish.help':
+    'Controlla i turni qui sopra, poi pubblica per renderli visibili a tutti e avviare le notifiche.',
   'schedule.you': 'tu',
   'schedule.empty': 'Nessun turno in questa casella',
   'slot.am': 'Mattina',
@@ -206,6 +211,8 @@ export const it = {
     'Generazione, pubblicazione e correzioni manuali del calendario. Ogni azione qui è registrata.',
   'admin.noWeeks': 'Nessuna settimana disponibile.',
 
+  'admin.noWeekSelected':
+    'Nessuna settimana selezionata: scegline una qui sopra per vedere i controlli.',
   'admin.solve.title': 'Genera calendario',
   'admin.solve.help':
     'Generare calcola il calendario ma non lo rende visibile: la pubblicazione è un passo separato.',

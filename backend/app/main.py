@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import API_PREFIX, settings
+from app.db import SessionLocal, utcnow
 from app.deps import DbDep
 from app.logging_config import configure_logging
 from app.routers import (
@@ -25,6 +26,7 @@ from app.routers import (
     weeks,
 )
 from app.scheduler import build_scheduler
+from app.scheduling import ensure_horizon
 from app.spa import mount_spa
 
 # §11 structured logs. Configured at import, which is after uvicorn has installed
@@ -54,6 +56,22 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             "accepted swaps will park in `pending_admin` with no way out. Unset it unless you "
             "are deliberately freezing swaps."
         )
+    # §3 rolling horizon. At startup as well as nightly, so a deployment that has
+    # run out of open weeks recovers on its next restart rather than waiting for
+    # 03:30 — and so the very first boot of a fresh install has somewhere to
+    # submit before anyone has submitted anything.
+    #
+    # Failure here must not stop the app from booting: no open week is a bad day,
+    # an API that will not start is a worse one, and /healthz stays honest either
+    # way. The nightly run is the second chance.
+    try:
+        with SessionLocal() as db:
+            created = ensure_horizon(db, utcnow())
+            db.commit()
+        logger.info("submission horizon ensured: %d week(s)", len(created))
+    except SQLAlchemyError:
+        logger.exception("could not ensure the submission horizon; the nightly job will retry")
+
     scheduler = build_scheduler()
     scheduler.start()
     try:

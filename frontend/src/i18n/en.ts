@@ -59,6 +59,11 @@ export const en = {
     'The request window is still open: shifts appear after it closes on Sunday at 17:00.',
   'schedule.notPublished.solved':
     'The schedule is being prepared and will be visible once published.',
+  // §3.2: only admin/root see this preview — the week is solved but not yet
+  // published, and workers see nothing.
+  'schedule.preview': 'Preview: not yet published',
+  'schedule.publish.help':
+    'Review the shifts above, then publish to make them visible to everyone and trigger notifications.',
   'schedule.you': 'you',
   'schedule.empty': 'No shift in this cell',
   'slot.am': 'Morning',
@@ -205,6 +210,8 @@ export const en = {
     'Generate, publish and hand-correct the schedule. Everything done here is recorded.',
   'admin.noWeeks': 'No week available.',
 
+  'admin.noWeekSelected':
+    'No week selected: pick one above to see the controls.',
   'admin.solve.title': 'Generate schedule',
   'admin.solve.help':
     'Generating computes the schedule but does not make it visible: publishing is a separate step.',

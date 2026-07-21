@@ -95,6 +95,50 @@ def get_or_create_week(db: DbSession, monday_date: dt.date) -> Week:
     return week
 
 
+# §3: "any future week with status open" is where a constraint may be submitted.
+# Four keeps roughly a month reachable — enough that someone can enter a holiday
+# before it is imminent, few enough that the week picker stays readable.
+HORIZON_WEEKS = 4
+
+
+def ensure_horizon(db: DbSession, now: dt.datetime, weeks: int = HORIZON_WEEKS) -> list[Week]:
+    """Guarantee that the next `weeks` submittable Mondays exist as rows.
+
+    Weeks used to be materialised only by the first submission for them, or by
+    the solve job. That is a deadlock, and the deployment hit it: the cron
+    created and solved the upcoming week, its window shut, and from then on the
+    only week in existence was closed — so no constraint could be submitted for
+    any week, and a submission was the one remaining thing that could have
+    created another. The horizon breaks the cycle by never depending on user
+    action to exist.
+
+    Idempotent, so it is safe to run at every startup and every night: existing
+    rows are returned untouched, whatever status they have since reached. It
+    starts from the first Monday whose window is still open, so it never mints a
+    week that could not be submitted to anyway.
+    """
+    monday = upcoming_submittable_monday(now)
+    created: list[Week] = []
+    for offset in range(weeks):
+        week = get_or_create_week(db, monday + dt.timedelta(weeks=offset))
+        created.append(week)
+    return created
+
+
+def upcoming_submittable_monday(now: dt.datetime) -> dt.date:
+    """The first Monday whose submission window has not already closed (§3.1).
+
+    Not simply "next Monday": the window shuts at Sunday 17:00 Europe/Rome, so
+    for the last seven hours of a Sunday the nearest Monday is already beyond
+    submitting and the horizon has to start from the one after it.
+    """
+    local = now.astimezone(_tz())
+    monday = local.date() - dt.timedelta(days=local.weekday())
+    while now >= window_deadline(monday):
+        monday += dt.timedelta(weeks=1)
+    return monday
+
+
 def resolve_submittable_week(db: DbSession, monday_date: dt.date) -> Week:
     """The week `monday_date` names, ready to accept a constraint edit (§3.1).
 

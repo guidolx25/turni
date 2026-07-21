@@ -83,6 +83,15 @@ export function AdminView() {
         </div>
       ) : null}
 
+      {/* Every week-scoped panel below is gated on `week`, so an unresolvable
+          week used to render NOTHING — no controls, no explanation, on a page
+          whose entire purpose is those controls. Silence is the worst failure
+          here: it is indistinguishable from "you lack the capability", which is
+          what it was mistaken for. Say which of the two it is. */}
+      {!week && weekList.length > 0 && !weeks.loading && !weeks.errorKey ? (
+        <Help>{t('admin.noWeekSelected')}</Help>
+      ) : null}
+
       {week && capabilities?.trigger_solve ? (
         <SolvePanel week={week} names={names} onChanged={reloadAll} />
       ) : null}

@@ -127,12 +127,19 @@ function ToolLinks() {
         <NavLink
           key={path}
           to={path}
-          aria-label={t(labelKey)}
           className={({ isActive }) =>
-            `rounded-md p-1.5 ${isActive ? 'text-ink-1' : 'text-ink-2 hover:text-ink-1'}`
+            `flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs ${
+              isActive ? 'text-ink-1' : 'text-ink-2 hover:text-ink-1'
+            }`
           }
         >
           <Icon className="h-4.5 w-4.5" />
+          {/* The label is VISIBLE, not just an aria-label. As bare icons these
+              read as decoration — the admin who owned the deployment never found
+              the panel, and every control on it (generate, publish, override,
+              audit) was unreachable in practice. An affordance only two of six
+              people use is the one that most needs naming. */}
+          <span>{t(labelKey)}</span>
         </NavLink>
       ))}
     </>

@@ -8,9 +8,19 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import type { AssignmentSlot, Day, ScheduleAssignmentOut, WeekOut } from '../api/types'
+import type { TranslationKey } from '../i18n/it'
 import { DAY_ORDER } from '../api/types'
+import { errorKey as toErrorKey } from '../api/client'
+import { adminApi } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
-import { ErrorNote, LoadingIndicator, WeekPicker, WeekStatusBadge } from '../components/common'
+import { hasAdminPanelAccess } from '../auth/capabilities'
+import {
+  BUTTON_PRIMARY,
+  ErrorNote,
+  LoadingIndicator,
+  WeekPicker,
+  WeekStatusBadge,
+} from '../components/common'
 import { LockIcon, LockOpenIcon } from '../components/icons'
 import { useCountdown } from '../hooks/useCountdown'
 import { useSchedule, useWeeks } from '../hooks/useResource'
@@ -159,6 +169,43 @@ function ScheduleGrid({
   )
 }
 
+/**
+ * Publish, offered beside the grid being reviewed (§3.3 solve → review → publish).
+ *
+ * The admin panel keeps its own publish control; this is the same call reached
+ * from where the decision is actually made. Gated on `trigger_solve` — §5 has no
+ * separate "publish" row, and the same tier owns both halves of the manual path.
+ */
+function PublishInline({ monday, onPublished }: { monday: string; onPublished: () => void }) {
+  const t = useT()
+  const [busy, setBusy] = useState(false)
+  const [errorKey, setErrorKey] = useState<TranslationKey | null>(null)
+
+  const publish = () => {
+    setBusy(true)
+    setErrorKey(null)
+    adminApi
+      .publish(monday)
+      .then(onPublished)
+      .catch((error: unknown) => {
+        setErrorKey(toErrorKey(error))
+      })
+      .finally(() => {
+        setBusy(false)
+      })
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border border-line bg-surface-1 p-3">
+      <p className="text-xs text-ink-2">{t('schedule.publish.help')}</p>
+      <button type="button" disabled={busy} onClick={publish} className={BUTTON_PRIMARY}>
+        {busy ? t('admin.publish.working') : t('admin.publish.submit')}
+      </button>
+      {errorKey ? <ErrorNote errorKey={errorKey} /> : null}
+    </div>
+  )
+}
+
 function NotPublished({ status }: { status: 'open' | 'solved' }) {
   const t = useT()
   return (
@@ -174,6 +221,8 @@ function NotPublished({ status }: { status: 'open' | 'solved' }) {
 
 export function ScheduleView() {
   const t = useT()
+  const { user } = useAuth()
+  const capabilities = user?.capabilities
   const weeks = useWeeks()
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null)
 
@@ -182,8 +231,20 @@ export function ScheduleView() {
   const week = weekList.find((w) => w.monday_date === activeWeek) ?? null
   const locked = week?.status === 'locked'
 
-  // Fetch assignments only for published weeks — visibility keys off `locked`.
-  const schedule = useSchedule(locked && activeWeek ? activeWeek : null)
+  /**
+   * §3.2: `solved` exists so admin/root can review before publishing — workers
+   * see nothing, reviewers see the grid. `GET /schedule` already implements
+   * exactly that (`status is LOCKED or has_admin_capability`), but this view
+   * used to gate the *request* on `locked` alone, so the preview the backend
+   * served was never asked for and a reviewer saw the worker's empty state.
+   *
+   * Mirrors the backend predicate rather than inventing one: every §5 admin row
+   * derives from the same flag `has_admin_capability` reads, and
+   * `hasAdminPanelAccess` is that same OR on this side.
+   */
+  const canPreview = hasAdminPanelAccess(user?.capabilities)
+  const showsGrid = locked || (canPreview && week?.status === 'solved')
+  const schedule = useSchedule(showsGrid && activeWeek ? activeWeek : null)
   const countdown = useCountdown(week?.status === 'open' ? week.submission_deadline : null)
 
   return (
@@ -207,13 +268,21 @@ export function ScheduleView() {
             ) : null}
           </div>
 
-          {locked ? (
+          {showsGrid ? (
             <>
-              {/* Lock state must be unmistakable (§9): published banner. */}
-              <p className="flex items-center gap-1.5 text-xs text-ok">
-                <LockIcon className="h-3.5 w-3.5" />
-                {t('schedule.published')}
-              </p>
+              {/* Lock state must be unmistakable (§9): published banner, or the
+                  preview banner that says this is NOT yet what workers see. */}
+              {locked ? (
+                <p className="flex items-center gap-1.5 text-xs text-ok">
+                  <LockIcon className="h-3.5 w-3.5" />
+                  {t('schedule.published')}
+                </p>
+              ) : (
+                <p className="flex items-center gap-1.5 text-xs text-spiaggino">
+                  <LockOpenIcon className="h-3.5 w-3.5" />
+                  {t('schedule.preview')}
+                </p>
+              )}
               {schedule.loading ? <LoadingIndicator /> : null}
               {schedule.errorKey ? (
                 <ErrorNote errorKey={schedule.errorKey} onRetry={schedule.reload} />
@@ -223,6 +292,12 @@ export function ScheduleView() {
                   monday={schedule.data.monday_date}
                   assignments={schedule.data.assignments}
                 />
+              ) : null}
+              {/* Reviewing and publishing are one motion, so the action sits
+                  where the review happens. It is the same POST /admin/publish the
+                  admin panel offers — a second entry point, not a second rule. */}
+              {!locked && capabilities?.trigger_solve ? (
+                <PublishInline monday={week.monday_date} onPublished={weeks.reload} />
               ) : null}
             </>
           ) : (
